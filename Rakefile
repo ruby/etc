@@ -7,4 +7,12 @@ Rake::TestTask.new(:test) do |t|
   t.test_files = FileList['test/**/*_test.rb']
 end
 
+file("constdefs.h") do
+  `ruby ext/etc/mkconstants.rb -o ext/etc/constdefs.h`
+end
+
+require "rake/extensiontask"
+Rake::ExtensionTask.new("etc")
+task :compile => "constdefs.h".to_sym
+
 task :default => :test

@@ -2,7 +2,7 @@
 
 Gem::Specification.new do |spec|
   spec.name          = "etc"
-  spec.version       = Etc::VERSION
+  spec.version       = "0.2.1"
   spec.authors       = ["SHIBATA Hiroshi"]
   spec.email         = ["hsbt@ruby-lang.org"]
 
@@ -20,5 +20,5 @@ Gem::Specification.new do |spec|
 
   spec.add_development_dependency "bundler"
   spec.add_development_dependency "rake"
-  spec.add_development_dependency "minitest"
+  spec.add_development_dependency "rake-compiler"
 end

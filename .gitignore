@@ -7,3 +7,7 @@
 /pkg/
 /spec/reports/
 /tmp/
+/ext/etc/constdefs.h
+*.bundle
+*.so
+*.dll
