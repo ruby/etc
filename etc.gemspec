@@ -3,6 +3,7 @@
 Gem::Specification.new do |spec|
   spec.name          = "etc"
   spec.version       = "0.2.1"
+  soec.date          = '2017-02-27'
   spec.authors       = ["Yukihiro Matsumoto"]
   spec.email         = ["matz@ruby-lang.org"]
 
@@ -17,6 +18,9 @@ Gem::Specification.new do |spec|
   spec.bindir        = "exe"
   spec.executables   = spec.files.grep(%r{^exe/}) { |f| File.basename(f) }
   spec.require_paths = ["lib"]
+  spec.extensions    = %w{extconf.rb}
+
+  spec.required_ruby_version = ">= 2.5.0dev"
 
   spec.add_development_dependency "bundler"
   spec.add_development_dependency "rake"
