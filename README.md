@@ -1,8 +1,10 @@
 # Etc
 
-Welcome to your new gem! In this directory, you'll find the files you need to be able to package up your Ruby library into a gem. Put your Ruby code in the file `lib/etc`. To experiment with that code, run `bin/console` for an interactive prompt.
+The Etc module provides access to information typically stored in files in the /etc directory on Unix systems.
 
-TODO: Delete this and the text above, and describe your gem
+The information accessible consists of the information found in the `/etc/passwd` and `/etc/group` files, plus information about he system's temporary directory (/tmp) and configuration directory (/etc).
+
+The Etc module provides a more reliable way to access information about the logged in user than environment variables such as +$USER+.
 
 ## Installation
 
@@ -22,7 +24,18 @@ Or install it yourself as:
 
 ## Usage
 
-TODO: Write usage instructions here
+```
+require 'etc'
+
+login = Etc.getlogin
+info = Etc.getpwnam(login)
+username = info.gecos.split(/,/).first
+puts "Hello #{username}, I see your login name is #{login}"
+```
+
+Note that the methods provided by this module are not always secure. It should be used for informational purposes, and not for security.
+
+All operations defined in this module are class methods, so that you can include the Etc module into your class.
 
 ## Development
 
