@@ -26,7 +26,7 @@ Or install it yourself as:
 
 ## Usage
 
-```
+```ruby
 require 'etc'
 
 login = Etc.getlogin
