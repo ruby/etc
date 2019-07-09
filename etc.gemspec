@@ -18,8 +18,6 @@ Gem::Specification.new do |spec|
     LICENSE.txt
     README.md
     Rakefile
-    bin/console
-    bin/setup
     etc.gemspec
     ext/etc/etc.c
     ext/etc/extconf.rb
