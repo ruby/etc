@@ -4,7 +4,7 @@ require "rake/testtask"
 name = "etc"
 specfile = name.tr("/", "-")+".gemspec"
 
-VERSIONS = %w[2.2.2 2.3.0 2.4.0 2.5.0]
+VERSIONS = %w[2.4.0 2.5.0 2.6.0]
 
 headers = ["ext/etc/constdefs.h"]
 task compile: headers
