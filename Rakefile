@@ -6,6 +6,13 @@ specfile = name.tr("/", "-")+".gemspec"
 
 VERSIONS = %w[2.2.2 2.3.0 2.4.0 2.5.0]
 
+headers = ["ext/etc/constdefs.h"]
+task compile: headers
+task build: headers
+file "ext/etc/constdefs.h" => "ext/etc/mkconstants.rb" do |t|
+  ruby t.prerequisites.first, "-o", t.name
+end
+
 Rake::TestTask.new(:test) do |t|
   t.libs << "test" << "test/lib"
   t.libs << "lib"
@@ -30,5 +37,6 @@ task 'build:mingw' do
   require 'rake_compiler_dock'
   RakeCompilerDock.sh "bundle && rake cross native gem RUBY_CC_VERSION=#{VERSIONS.join(':')}"
 end
+task 'build:mingw' => headers
 
 task :default => [:compile, :test]

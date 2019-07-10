@@ -25,6 +25,7 @@ Gem::Specification.new do |spec|
   spec.files         = %w[
     LICENSE.txt
     README.md
+    ext/etc/constdefs.h
     ext/etc/etc.c
     ext/etc/extconf.rb
     ext/etc/mkconstants.rb
