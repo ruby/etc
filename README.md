@@ -1,7 +1,5 @@
 # Etc
 
-[![Build Status](https://travis-ci.org/ruby/etc.svg?branch=master)](https://travis-ci.org/ruby/etc)
-
 The Etc module provides access to information typically stored in files in the /etc directory on Unix systems.
 
 The information accessible consists of the information found in the `/etc/passwd` and `/etc/group` files, plus information about he system's temporary directory (/tmp) and configuration directory (/etc).
