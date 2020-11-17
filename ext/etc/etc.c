@@ -482,6 +482,69 @@ etc_getgrnam(VALUE obj, VALUE nam)
 #endif
 }
 
+/* call-seq:
+ *	getgrouplist(user)	->  Array
+ *
+ * Returns a list of groups for the specified +user+, as found in
+ * /etc/group.
+ *
+ * The information is returned as an Array of Group structs.
+ *
+ * The primary group is not included, unless the user is present in the
+ * <code>gr_mem</code> member of the <code>group</code> structure.
+ *
+ * See the unix manpage for <code>getgrouplist(3)</code> for more detail.
+ *
+ * === Example:
+ *
+ *	Etc.getgrouplist('root')
+ *	#=> [#<struct Etc::Group name="root", passwd="x", gid=0, mem=["root"]>]
+ *
+ */
+static VALUE
+etc_getgrouplist(VALUE obj, VALUE user)
+{
+#ifdef HAVE_GETGROUPLIST
+    int ngroups = 0;
+    gid_t *groups = NULL;
+    struct group *gr;
+    struct passwd *pw;
+    const char *p = StringValueCStr(user);
+    VALUE groups_ary;
+    VALUE v;
+
+    pw = getpwnam(p);
+    if (pw == NULL) rb_raise(rb_eArgError, "can't find user for %"PRIsVALUE, user);
+
+    /* call first to get number of groups */
+    if (getgrouplist(p, pw->pw_gid, groups, &ngroups) == -1) {
+        groups = ALLOCV_N(gid_t, v, ngroups);
+
+        /* call again to retrieve the group list */
+        getgrouplist(p, pw->pw_gid, groups, &ngroups);
+    }
+
+    groups_ary = rb_ary_new();
+    for (int j = 0; j < ngroups; j++) {
+        gr = getgrgid(groups[j]);
+        if (gr != NULL) {
+            char **tbl;
+
+            /* consider user to be in a group only if present in the gr_mem field */
+            tbl = gr->gr_mem;
+            while (*tbl) {
+                if (strcmp(*tbl, p) == 0) rb_ary_push(groups_ary, setup_group(gr));
+                tbl++;
+            }
+        }
+    }
+    ALLOCV_END(v);
+    return groups_ary;
+#else
+    return Qnil;
+#endif
+}
+
 #ifdef HAVE_GETGRENT
 static int group_blocking = 0;
 static VALUE
@@ -1091,6 +1154,7 @@ Init_etc(void)
 
     rb_define_module_function(mEtc, "getgrgid", etc_getgrgid, -1);
     rb_define_module_function(mEtc, "getgrnam", etc_getgrnam, 1);
+    rb_define_module_function(mEtc, "getgrouplist", etc_getgrouplist, 1);
     rb_define_module_function(mEtc, "group", etc_group, 0);
     rb_define_module_function(mEtc, "setgrent", etc_setgrent, 0);
     rb_define_module_function(mEtc, "endgrent", etc_endgrent, 0);

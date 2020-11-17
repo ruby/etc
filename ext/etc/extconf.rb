@@ -12,6 +12,7 @@ have_func("uname((struct utsname *)NULL)", headers)
 have_func("getlogin")
 have_func("getpwent")
 have_func("getgrent")
+have_func("getgrouplist")
 if (sysconfdir = RbConfig::CONFIG["sysconfdir"] and
     !RbConfig.expand(sysconfdir.dup, "prefix"=>"", "DESTDIR"=>"").empty?)
   $defs.push("-DSYSCONFDIR=#{Shellwords.escape(sysconfdir.dump)}")

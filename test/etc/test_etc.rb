@@ -106,6 +106,27 @@ class TestEtc < Test::Unit::TestCase
     end
   end
 
+  def test_getgrouplist
+    users = Hash.new {[]}
+
+    # get users
+    Etc.passwd do |s|
+      users[s.name] = []
+    end
+
+    # get groups for all users
+    Etc.group do |gr|
+      users.each do |user, _|
+        users[user].append(gr) if gr.mem.include?(user)
+      end
+    end
+
+    # confirm getgrouplist reports the same
+    users.each do |user, groups|
+      assert_equal(groups, Etc.getgrouplist(user))
+    end
+  end
+
   def test_group_with_low_level_api
     a = []
     Etc.group {|s| a << s }
