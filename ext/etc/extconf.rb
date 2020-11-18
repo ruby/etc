@@ -12,6 +12,13 @@ have_func("uname((struct utsname *)NULL)", headers)
 have_func("getlogin")
 have_func("getpwent")
 have_func("getgrent")
+with_werror("", :werror => true) do |opt|
+  if have_func("getgrouplist(\"\", (gid_t)0, (gid_t*)0, (int*)0)", ["grp.h"], opt)
+    $defs.push("-D""GID_T_IN_GETGROUPLIST")
+  else
+    have_func("getgrouplist(\"\", 0, (int*)0, (int*)0)", nil, opt)
+  end
+end
 if (sysconfdir = RbConfig::CONFIG["sysconfdir"] and
     !RbConfig.expand(sysconfdir.dup, "prefix"=>"", "DESTDIR"=>"").empty?)
   $defs.push("-DSYSCONFDIR=#{Shellwords.escape(sysconfdir.dump)}")

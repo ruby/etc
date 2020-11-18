@@ -646,6 +646,111 @@ etc_getgrent(VALUE obj)
     return Qnil;
 }
 
+#if defined(HAVE_GETPWENT)
+# if defined(HAVE_GETGROUPLIST)
+#   ifdef GID_T_IN_GETGROUPLIST
+typedef gid_t grouplist_type;
+#   else
+typedef int grouplist_type;
+#   endif
+
+static VALUE
+pwd_groups_list_1(const char *p, rb_gid_t gid, int *nfound, int ngroups)
+{
+    VALUE ary, v = 0;
+    int i;
+    grouplist_type *groups = ALLOCV_N(grouplist_type, v, ngroups);
+
+    *nfound = ngroups;
+    if (getgrouplist(p, gid, groups, nfound) == -1) {
+	ALLOCV_END(v);
+	return Qfalse;
+    }
+
+    ngroups = *nfound;
+    ary = rb_ary_new_capa(ngroups);
+    for (i = 0; i < ngroups; i++) {
+	rb_ary_push(ary, GIDT2NUM((rb_gid_t)groups[i]));
+    }
+    ALLOCV_END(v);
+    return ary;
+}
+
+static VALUE
+pwd_groups_list(const char *p, rb_gid_t gid)
+{
+    VALUE ary;
+    int nfound, ngroups;
+    const int max_ngroups = 65536;
+#   ifdef NGROUPS
+    ngroups = NGROUPS;
+#   else
+    ngroups = 16;
+#   endif
+    while (!(ary = pwd_groups_list_1(p, gid, &nfound, ngroups))) {
+	if (nfound > ngroups)	/* Linux */
+	    ngroups = nfound;
+	else if ((nfound < ngroups) ||	     /* something wrong */
+		 ((ngroups *= 2) > max_ngroups)) /* macOS */
+	    rb_raise(rb_eRuntimeError, "getgrouplist");
+    }
+    return ary;
+}
+# else
+struct pwd_groups_args {
+    VALUE groups_ary;
+    const char *user;
+};
+
+static VALUE
+pwd_groups_iterate(VALUE arg)
+{
+    struct group *gr;
+    struct pwd_groups_args *argp = (struct pwd_groups_args *)arg;
+    VALUE groups_ary = argp->groups_ary;
+    const char *p = argp->user;
+
+    while ((gr = getgrent()) != 0) {
+	char **tbl = gr->gr_mem;
+	for (; *tbl; ++tbl) {
+	    if (strcmp(*tbl, p) == 0) {
+		rb_ary_push(groups_ary, GIDT2NUM(gr->gr_gid));
+		break;
+	    }
+	}
+    }
+
+    return Qnil;
+}
+
+static VALUE
+pwd_groups_list(const char *p, rb_gid_t gid)
+{
+    struct pwd_groups_args args;
+    if (RUBY_ATOMIC_CAS(group_blocking, 0, 1)) {
+	rb_raise(rb_eRuntimeError, "parallel group iteration");
+    }
+    args.groups_ary = rb_ary_new_from_args(1, GIDT2NUM(gid));
+    args.user = p;
+    rb_ensure(pwd_groups_iterate, (VALUE)&args, group_ensure, 0);
+    return args.groups_ary;
+}
+# endif
+#endif
+
+static VALUE
+pwd_groups(VALUE user)
+{
+    VALUE name = rb_struct_aref(user, ID2SYM(rb_intern("name")));
+    rb_gid_t gid = NUM2GIDT(rb_struct_aref(user, ID2SYM(rb_intern("gid"))));
+    const char *p = StringValueCStr(name);
+#if defined(HAVE_GETPWENT)
+    return pwd_groups_list(p, gid);
+#else
+    return Qnil;
+#endif
+}
+
 #define numberof(array) (sizeof(array) / sizeof(*(array)))
 
 #ifdef _WIN32
@@ -1203,6 +1308,8 @@ Init_etc(void)
     rb_deprecate_constant(rb_cStruct, "Passwd");
     rb_extend_object(sPasswd, rb_mEnumerable);
     rb_define_singleton_method(sPasswd, "each", etc_each_passwd, 0);
+    rb_define_method(sPasswd, "groups", pwd_groups, 0);
+
 #ifdef HAVE_GETGRENT
     sGroup = rb_struct_define_under(mEtc, "Group", "name",
 #ifdef HAVE_STRUCT_GROUP_GR_PASSWD

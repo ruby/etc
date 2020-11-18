@@ -78,6 +78,14 @@ class TestEtc < Test::Unit::TestCase
     Etc.group { assert_raise(RuntimeError) { Etc.group { } }; break }
   end
 
+  def test_passwd_groups
+    omit unless passwd = Etc.getpwnam(Etc.getlogin)
+    omit unless groups = passwd.groups
+    assert_kind_of(Array, groups)
+    assert groups.all? {|g| Integer === g}
+    assert_include groups, Process.gid
+  end
+
   def test_getgrgid
     # group database is not unique on GID, and which entry will be
     # returned by getgrgid() is not specified.
