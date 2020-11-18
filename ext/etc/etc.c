@@ -52,6 +52,10 @@ char *getenv();
 #endif
 char *getlogin();
 
+#ifdef HAVE_GETGROUPLIST_2
+extern int32_t getgrouplist_2(const char *name, gid_t basegid, gid_t **groups);
+#endif
+
 #define RUBY_ETC_VERSION "1.1.0"
 
 #ifdef HAVE_RB_DEPRECATE_CONSTANT
@@ -483,7 +487,7 @@ etc_getgrnam(VALUE obj, VALUE nam)
 }
 
 /* call-seq:
- *	getgrouplist(user)	->  Array
+ *	getgrouplist(user)	->	Array
  *
  * Returns a list of groups for the specified +user+, as found in
  * /etc/group.
@@ -516,6 +520,10 @@ etc_getgrouplist(VALUE obj, VALUE user)
     pw = getpwnam(p);
     if (pw == NULL) rb_raise(rb_eArgError, "can't find user for %"PRIsVALUE, user);
 
+#ifdef HAVE_GETGROUPLIST_2
+    ngroups = getgrouplist_2(p, pw->pw_gid, &groups);
+    if (ngroups == -1) return Qnil;
+#else
     /* call first to get number of groups */
     if (getgrouplist(p, pw->pw_gid, groups, &ngroups) == -1) {
         groups = ALLOCV_N(gid_t, v, ngroups);
@@ -523,6 +531,7 @@ etc_getgrouplist(VALUE obj, VALUE user)
         /* call again to retrieve the group list */
         getgrouplist(p, pw->pw_gid, groups, &ngroups);
     }
+#endif
 
     groups_ary = rb_ary_new();
     for (int j = 0; j < ngroups; j++) {
@@ -538,9 +547,13 @@ etc_getgrouplist(VALUE obj, VALUE user)
             }
         }
     }
-    ALLOCV_END(v);
-    return groups_ary;
+#ifdef HAVE_GETGROUPLIST_2
+    free(groups);
 #else
+    ALLOCV_END(v);
+#endif
+    return groups_ary;
+#else /* HAVE_GETGROUPLIST */
     return Qnil;
 #endif
 }

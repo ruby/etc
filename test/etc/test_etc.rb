@@ -117,13 +117,13 @@ class TestEtc < Test::Unit::TestCase
     # get groups for all users
     Etc.group do |gr|
       users.each do |user, _|
-        users[user].append(gr) if gr.mem.include?(user)
+        users[user] |= [gr.name] if gr.mem.include?(user)
       end
     end
 
     # confirm getgrouplist reports the same
     users.each do |user, groups|
-      assert_equal(groups, Etc.getgrouplist(user))
+      assert_equal(groups.sort, Etc.getgrouplist(user).map(&:name).sort)
     end
   end
 
