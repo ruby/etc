@@ -107,23 +107,18 @@ class TestEtc < Test::Unit::TestCase
   end
 
   def test_getgrouplist
+    return if Etc.getgrouplist(Etc.getpwuid.name) == nil
+
     users = Hash.new {[]}
 
-    # get users
+    # map user to gid
     Etc.passwd do |s|
-      users[s.name] = []
-    end
-
-    # get groups for all users
-    Etc.group do |gr|
-      users.each do |user, _|
-        users[user] |= [gr.name] if gr.mem.include?(user)
-      end
+      users[s.name] = s.gid
     end
 
     # confirm getgrouplist reports the same
-    users.each do |user, groups|
-      assert_equal(groups.sort, Etc.getgrouplist(user).map(&:name).sort)
+    users.each do |user, group|
+      assert_include(Etc.getgrouplist(user), group)
     end
   end
 

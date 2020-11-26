@@ -14,7 +14,6 @@ have_func("getlogin")
 have_func("getpwent")
 have_func("getgrent")
 have_func("getgrouplist")
-have_func("getgrouplist_2") if /darwin/ === RUBY_PLATFORM
 if (sysconfdir = RbConfig::CONFIG["sysconfdir"] and
     !RbConfig.expand(sysconfdir.dup, "prefix"=>"", "DESTDIR"=>"").empty?)
   $defs.push("-DSYSCONFDIR=#{Shellwords.escape(sysconfdir.dump)}")

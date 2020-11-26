@@ -26,6 +26,13 @@
 
 #include <errno.h>
 
+#include <limits.h>
+#ifdef NGROUPS_MAX
+#define MAX_GROUPS NGROUPS_MAX
+#else
+#define MAX_GROUPS 64
+#endif
+
 #ifdef HAVE_SYS_UTSNAME_H
 #include <sys/utsname.h>
 #endif
@@ -51,10 +58,6 @@ static VALUE sGroup;
 char *getenv();
 #endif
 char *getlogin();
-
-#ifdef HAVE_GETGROUPLIST_2
-extern int32_t getgrouplist_2(const char *name, gid_t basegid, gid_t **groups);
-#endif
 
 #define RUBY_ETC_VERSION "1.1.0"
 
@@ -492,26 +495,26 @@ etc_getgrnam(VALUE obj, VALUE nam)
  * Returns a list of groups for the specified +user+, as found in
  * /etc/group.
  *
- * The information is returned as an Array of Group structs.
- *
- * The primary group is not included, unless the user is present in the
- * <code>gr_mem</code> member of the <code>group</code> structure.
+ * The information is returned as an Array of GIDs.
  *
  * See the unix manpage for <code>getgrouplist(3)</code> for more detail.
  *
  * === Example:
  *
  *	Etc.getgrouplist('root')
- *	#=> [#<struct Etc::Group name="root", passwd="x", gid=0, mem=["root"]>]
+ *	#=> [1000, 998, 993, 991, 3, 90, 98, 978, 56, 968, 966, 962]
  *
  */
 static VALUE
 etc_getgrouplist(VALUE obj, VALUE user)
 {
 #ifdef HAVE_GETGROUPLIST
-    int ngroups = 0;
-    gid_t *groups = NULL;
-    struct group *gr;
+    int ngroups, prev_ngroups;
+#ifdef __APPLE__
+    int *groups;
+#else
+    gid_t *groups;
+#endif
     struct passwd *pw;
     const char *p = StringValueCStr(user);
     VALUE groups_ary;
@@ -520,38 +523,39 @@ etc_getgrouplist(VALUE obj, VALUE user)
     pw = getpwnam(p);
     if (pw == NULL) rb_raise(rb_eArgError, "can't find user for %"PRIsVALUE, user);
 
-#ifdef HAVE_GETGROUPLIST_2
-    ngroups = getgrouplist_2(p, pw->pw_gid, &groups);
-    if (ngroups == -1) return Qnil;
-#else
-    /* call first to get number of groups */
-    if (getgrouplist(p, pw->pw_gid, groups, &ngroups) == -1) {
-        groups = ALLOCV_N(gid_t, v, ngroups);
+    /* The maximum number of supplementary group, plus the primary group */
+    ngroups = MAX_GROUPS + 1;
 
-        /* call again to retrieve the group list */
-        getgrouplist(p, pw->pw_gid, groups, &ngroups);
-    }
+    while (1) {
+#ifdef __APPLE__
+        groups = ALLOCV_N(int, v, ngroups);
+#else
+        groups = ALLOCV_N(gid_t, v, ngroups);
 #endif
+        prev_ngroups = ngroups;
+        if (getgrouplist(p, pw->pw_gid, groups, &ngroups) != -1) {
+            break;
+        }
+
+        ALLOCV_END(v);
+
+        if (ngroups <= prev_ngroups) {
+            if (ngroups > INT_MAX / 2) {
+                rb_raise(rb_eNoMemError, "out of memory");
+            }
+            ngroups *= 2;
+        }
+    }
 
     groups_ary = rb_ary_new();
     for (int j = 0; j < ngroups; j++) {
-        gr = getgrgid(groups[j]);
-        if (gr != NULL) {
-            char **tbl;
-
-            /* consider user to be in a group only if present in the gr_mem field */
-            tbl = gr->gr_mem;
-            while (*tbl) {
-                if (strcmp(*tbl, p) == 0) rb_ary_push(groups_ary, setup_group(gr));
-                tbl++;
-            }
-        }
-    }
-#ifdef HAVE_GETGROUPLIST_2
-    free(groups);
+#ifdef __APPLE__
+        rb_ary_push(groups_ary, GIDT2NUM(groups[j]));
 #else
-    ALLOCV_END(v);
+        rb_ary_push(groups_ary, INT2NUM(groups[j]));
 #endif
+    }
+    ALLOCV_END(v);
     return groups_ary;
 #else /* HAVE_GETGROUPLIST */
     return Qnil;
