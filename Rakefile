@@ -11,11 +11,19 @@ file "ext/etc/constdefs.h" => "ext/etc/mkconstants.rb" do |t|
 end
 
 Rake::TestTask.new(:test) do |t|
-  t.libs << "test"
-  t.libs << "lib"
+  t.libs << "test/lib"
+  t.ruby_opts << "-rhelper"
   t.test_files = FileList["test/**/test_*.rb"]
 end
 
 require 'rake/extensiontask'
 Rake::ExtensionTask.new(name)
+
+task :sync_tool do
+  require 'fileutils'
+  FileUtils.cp "../ruby/tool/lib/test/unit/core_assertions.rb", "./test/lib"
+  FileUtils.cp "../ruby/tool/lib/envutil.rb", "./test/lib"
+  FileUtils.cp "../ruby/tool/lib/find_executable.rb", "./test/lib"
+end
+
 task :default => :test
