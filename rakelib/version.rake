@@ -1,9 +1,10 @@
 class << (helper = Bundler::GemHelper.instance)
-  def update_gemspec
-    path = gemspec.loaded_from
+  SOURCE_PATH = "ext/etc/etc.c"
+  def update_source_version
+    path = SOURCE_PATH
     File.open(path, "r+b") do |f|
       d = f.read
-      if d.sub!(/^(_VERSION\s*=\s*)".*"/) {$1 + gemspec.version.to_s.dump}
+      if d.sub!(/^#define\s+RUBY_ETC_VERSION\s+\K".*"/) {version.to_s.dump}
         f.rewind
         f.truncate(0)
         f.print(d)
@@ -13,12 +14,12 @@ class << (helper = Bundler::GemHelper.instance)
 
   def commit_bump
     sh(%W[git commit -m bump\ up\ to\ #{gemspec.version}
-          #{gemspec.loaded_from}])
+          #{SOURCE_PATH}])
   end
 
   def version=(v)
     gemspec.version = v
-    update_gemspec
+    update_source_version
     commit_bump
   end
 end
