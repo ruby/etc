@@ -19,6 +19,9 @@ end
 
 tags = IO.popen(%w[git tag -l v[0-9]*]).grep(/v(.*)/) {$1}
 tags.sort_by! {|tag| tag.scan(/\d+/).map(&:to_i)}
+if !tags.empty? and IO.popen(%W[git log --format=%H v#{tags.last}..HEAD], &:read).empty?
+  tags.pop
+end
 tags.inject(nil) do |prev, tag|
   task("logs/ChangeLog-#{tag}") {|t| changelog[t.name, tag, prev]}
   tag
