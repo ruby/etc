@@ -1,5 +1,6 @@
 require "bundler/gem_tasks"
 require "rake/testtask"
+require "rdoc/task"
 
 name = "etc"
 
@@ -19,6 +20,12 @@ Rake::TestTask.new(:test) do |t|
   t.libs << "test/lib"
   t.ruby_opts << "-rhelper"
   t.test_files = FileList["test/**/test_*.rb"]
+end
+
+task "rdoc" =>  "changelogs"
+RDoc::Task.new do |rdoc|
+  rdoc.main = "README.md"
+  rdoc.rdoc_files.include("LICENSE.txt", "ChangeLog", "*.md", "lib/**/*.rb", "ext/**/*.c")
 end
 
 task :test => :compile
