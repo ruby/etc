@@ -22,3 +22,17 @@ jobs:
       run: gem update --system
     - name: Run test
       run: bundle exec rake compile test
+    - id: build
+      run: |
+        bundle exec rake build
+        echo "::set-output name=pkg::${GITHUB_REPOSITORY#*/}-${RUNNING_OS%-*}"
+      env:
+        RUNNING_OS: ${{matrix.os}}
+      if: ${{ matrix.ruby == '3.1' && !startsWith(matrix.os, 'ubuntu') }}
+      # Ubuntu 20.04 still has libyaml 0.2.2
+    - name: Upload package
+      uses: actions/upload-artifact@v2
+      with:
+        path: pkg/*.gem
+        name: ${{steps.build.outputs.pkg}}
+      if: steps.build.outputs.pkg
