@@ -4,6 +4,7 @@
 /_yardoc/
 /coverage/
 /doc/
+/logs/
 /pkg/
 /spec/reports/
 /tmp/
@@ -11,3 +12,4 @@
 *.bundle
 *.so
 *.dll
+ChangeLog
