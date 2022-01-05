@@ -22,6 +22,7 @@ tags.sort_by! {|tag| tag.scan(/\d+/).map(&:to_i)}
 if !tags.empty? and IO.popen(%W[git log --format=%H v#{tags.last}..HEAD], &:read).empty?
   tags.pop
 end
+p tags
 tags.inject(nil) do |prev, tag|
   task("logs/ChangeLog-#{tag}") {|t| changelog[t.name, tag, prev]}
   tag
