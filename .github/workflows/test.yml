@@ -24,7 +24,7 @@ jobs:
       run: bundle exec rake compile test
     - id: build
       run: |
-        git fetch --tags
+        git fetch --force --no-tags origin 'refs/tags/v*:refs/tags/v*'
         bundle exec rake build
         echo "::set-output name=pkg::${GITHUB_REPOSITORY#*/}-${RUNNING_OS%-*}"
       env:
