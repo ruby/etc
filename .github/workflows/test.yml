@@ -3,25 +3,43 @@ name: build
 on: [push, pull_request]
 
 jobs:
+  ruby-versions:
+    if: ${{ startsWith(github.repository, 'ruby/') || github.event_name != 'schedule' }}
+    uses: ruby/actions/.github/workflows/ruby_versions.yml@master
+    with:
+      engine: cruby-truffleruby
+      min_version: 2.6
+
   build:
+    needs: ruby-versions
     name: build (${{ matrix.ruby }} / ${{ matrix.os }})
     strategy:
       matrix:
-        ruby: [ '3.1', '3.0', '2.7', '2.6', head, truffleruby, truffleruby-head ]
+        ruby: ${{ fromJson(needs.ruby-versions.outputs.versions) }}
         os: [ ubuntu-latest, macos-latest ]
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     steps:
+    - name: git config
+      run: |
+        git config --global core.autocrlf false
+        git config --global core.eol lf
+        git config --global advice.detachedHead 0
     - uses: actions/checkout@v3
-    - name: Set up Ruby
+    - name: Set up Ruby ${{ matrix.ruby }}
       uses: ruby/setup-ruby@v1
       with:
         ruby-version: ${{ matrix.ruby }}
+        rubygems: ${{ matrix.ruby < '2.7' && 'latest' || '' }}
         bundler-cache: true
-    # Avoid issues on these platforms
-    - if: ${{ matrix.ruby == '2.5' || matrix.ruby == '2.6' }}
-      run: gem update --system
     - name: Run test
       run: bundle exec rake compile test
+    - name: Select the latest ruby release
+      id: latest
+      run: |
+        printenv versions | jq -r '[.[] | select(test("^[0-9]"))] | "version="+max' >> $GITHUB_OUTPUT
+      env:
+        versions: ${{needs.ruby-versions.outputs.versions}}
+      shell: sh
     - id: build
       run: |
         git fetch --force --no-tags origin 'refs/tags/v*:refs/tags/v*'
@@ -29,7 +47,8 @@ jobs:
         echo "pkg=${GITHUB_REPOSITORY#*/}-${RUNNING_OS%-*}" >> $GITHUB_OUTPUT
       env:
         RUNNING_OS: ${{matrix.os}}
-      if: ${{ matrix.ruby == '3.1' && !startsWith(matrix.os, 'ubuntu') }}
+      if: ${{matrix.ruby == steps.latest.outputs.version}}
+      shell: bash
       # Ubuntu 20.04 still has libyaml 0.2.2
     - name: Upload package
       uses: actions/upload-artifact@v3
