@@ -9,3 +9,4 @@ gemspec
 gem 'fileutils', '>= 1.2.0'
 gem 'rake-compiler'
 gem 'test-unit'
+gem "test-unit-ruby-core"
