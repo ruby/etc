@@ -33,13 +33,6 @@ jobs:
         bundler-cache: true
     - name: Run test
       run: bundle exec rake compile test
-    - name: Select the latest ruby release
-      id: latest
-      run: |
-        printenv versions | jq -r '[.[] | select(test("^[0-9]"))] | "version="+max' >> $GITHUB_OUTPUT
-      env:
-        versions: ${{needs.ruby-versions.outputs.versions}}
-      shell: sh
     - id: build
       run: |
         git fetch --force --no-tags origin 'refs/tags/v*:refs/tags/v*'
@@ -47,7 +40,7 @@ jobs:
         echo "pkg=${GITHUB_REPOSITORY#*/}-${RUNNING_OS%-*}" >> $GITHUB_OUTPUT
       env:
         RUNNING_OS: ${{matrix.os}}
-      if: ${{matrix.ruby == steps.latest.outputs.version}}
+      if: ${{ matrix.ruby == fromJson(needs.ruby-versions.outputs.latest) }}
       shell: bash
       # Ubuntu 20.04 still has libyaml 0.2.2
     - name: Upload package
