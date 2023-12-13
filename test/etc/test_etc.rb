@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 require "test/unit"
 require "etc"
+require "tempfile"
 
 class TestEtc < Test::Unit::TestCase
   def test_getlogin
@@ -193,4 +194,50 @@ class TestEtc < Test::Unit::TestCase
       assert_equal(name2, name)
     RUBY
   end
+
+  def test_freedesktop_os_release
+      e = assert_raise(RuntimeError) { Etc.freedesktop_os_release '/not/found' }
+      assert_equal 'No suitable sources', e.message
+
+      Tempfile.create do |file|
+        file.puts "ID=test"
+        file.flush
+        if RUBY_PLATFORM =~ /linux/i
+          assert_equal({:ID=>"test", :NAME=>"Linux", :PRETTY_NAME=>"Linux"},
+                       Etc.freedesktop_os_release(file.path))
+        else
+          assert_equal({:ID=>"test"}, Etc.freedesktop_os_release(file.path))
+        end
+      end
+
+      Tempfile.create do |file|
+        file.puts "foo='1"
+        file.flush
+        e = assert_raise(RuntimeError) {
+          Etc.freedesktop_os_release file.path
+        }
+        assert_equal("Parsing `#{file.path}` failed", e.message)
+      end
+  end
+
+  def test_freedesktop_os_release_parse_str
+      assert_equal({}, Etc::Freedesktop.os_release_parse_str(""))
+      assert_equal({}, Etc::Freedesktop.os_release_parse_str("\n"))
+      assert_equal({ :BAR=>"$USER=foo `bar`" },
+                   Etc::Freedesktop.os_release_parse_str("\n\
+not an assigment, ignored
+IGNORED_FOR_THE_VALUE_CONTAINS_AN_EMPTY_STRING_1=\n\
+IGNORED_FOR_THE_VALUE_CONTAINS_AN_EMPTY_STRING_2=''\n\
+INVALID FOR THE NAME HAS SPACES='123'\n\
+0_INVALID_FOR_THE_NAME_STARTS_WITH_A_DIGIT='123'\n\
+bar=\"$USER=foo `bar`\"\n\
+ # all comments
+# are ignored"))
+
+      e = assert_raise(ArgumentError) {
+        Etc::Freedesktop.os_release_parse_str("foo=\"1")
+      }
+      assert_match(/Unmatched quote/, e.message)
+  end
+
 end

@@ -31,6 +31,7 @@ Gem::Specification.new do |spec|
     ext/etc/etc.c
     ext/etc/extconf.rb
     ext/etc/mkconstants.rb
+    lib/etc.rb
     test/etc/test_etc.rb
   ] + changelogs
   spec.rdoc_options = ["--main", "README.md"]
