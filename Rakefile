@@ -25,7 +25,6 @@ end
 task "rdoc" =>  "changelogs"
 RDoc::Task.new do |rdoc|
   rdoc.main = "README.md"
-  rdoc.rdoc_files.include("LICENSE.txt", "ChangeLog", "*.md", "lib/**/*.rb", "ext/**/*.c")
 end
 
 task :test => :compile
