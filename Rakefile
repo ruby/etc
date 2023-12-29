@@ -1,6 +1,7 @@
 require "bundler/gem_tasks"
 require "rake/testtask"
 require "rdoc/task"
+require "etc"
 
 name = "etc"
 

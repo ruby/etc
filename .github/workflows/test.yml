@@ -23,5 +23,8 @@ jobs:
         ruby-version: ${{ matrix.ruby }}
         rubygems: ${{ matrix.ruby < '2.7' && '3.4.22' || '' }}
         bundler-cache: true
+    - name: Add RUBYLIB to load fake etc.rb
+      run:
+        echo RUBYLIB=%CD:\=/%/lib >> $GITHUB_ENV
     - name: Run test
       run: bundle exec rake compile test
