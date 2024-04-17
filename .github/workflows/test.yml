@@ -33,14 +33,23 @@ jobs:
         bundler-cache: true
     - name: Run test
       run: bundle exec rake compile test
+    - id: fetch
+      run: |
+        : Fetch deeper for changelogs
+        set -x
+        git fetch --force --no-tags origin 'refs/tags/v*:refs/tags/v*'
+        tags=($(git tag --list --no-contains HEAD --sort -version:refname))
+        git fetch --shallow-exclude=${tags[0]} origin
+        set +x
+      shell: bash
+      if: ${{ matrix.ruby == needs.ruby-versions.outputs.latest }}
     - id: build
       run: |
-        git fetch --force --no-tags origin 'refs/tags/v*:refs/tags/v*'
         bundle exec rake build
         echo "pkg=${GITHUB_REPOSITORY#*/}-${RUNNING_OS%-*}" >> $GITHUB_OUTPUT
       env:
         RUNNING_OS: ${{matrix.os}}
-      if: ${{ matrix.ruby == fromJson(needs.ruby-versions.outputs.latest) }}
+      if: ${{ steps.fetch.outcome == 'success' }}
       shell: bash
       # Ubuntu 20.04 still has libyaml 0.2.2
     - name: Upload package
