@@ -1,20 +1,24 @@
+# Requires >= ruby 2.4, for `each(chomp: true)`
+
 task "build" => "changelogs"
 
 changelog = proc do |output, ver = nil, prev = nil|
   ver &&= Gem::Version.new(ver)
   range = [[prev], [ver, "HEAD"]].map {|ver, branch| ver ? "v#{ver.to_s}" : branch}.compact.join("..")
   cmd = %W[git log --date=iso --format=fuller --topo-order --no-merges
-               --invert-grep --fixed-strings --grep=#{'[ci skip]'}
+               --invert-grep --fixed-strings --grep=#{'[ci skip]'} -z
                #{range} --]
   IO.popen(cmd) do |log|
-    line = log.gets
+    break unless c = log.read(1)
+    log.ungetbyte(c)
     FileUtils.mkpath(File.dirname(output))
     File.open(output, "wb") do |f|
-      f.print "-*- coding: utf-8 -*-\n\n", line
-      log.each_line do |line|
-        line.sub!(/^(?!:)(?:Author|Commit)?(?:Date)?: /, '  \&')
-        line.sub!(/ +$/, '')
-        f.print(line)
+      f.print "-*- coding: utf-8 -*-\n"
+      log.each("\0", chomp: true) do |line|
+        next if /^Author: *\[bot\]@users\.noreply\.github\.com>/ =~ line
+        line.gsub!(/^(?!:)(?:Author|Commit)?(?:Date)?: /, '  \&')
+        line.gsub!(/ +$/, '')
+        f.print("\n", line)
       end
     end
   end
