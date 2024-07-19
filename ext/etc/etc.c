@@ -10,6 +10,7 @@
 #include "ruby.h"
 #include "ruby/encoding.h"
 #include "ruby/io.h"
+#include "ruby/thread.h"
 
 #include <sys/types.h>
 #ifdef HAVE_UNISTD_H
@@ -94,6 +95,30 @@ atomic_exchange(volatile rb_atomic_t *var, rb_atomic_t newval)
 }
 #endif
 
+static VALUE mEtc_mutex;
+
+struct mEtc_mutex_args {
+    void * (*func)(void *);
+    void *arg;
+};
+
+static VALUE
+mEtc_mutex_nogvl(VALUE arg)
+{
+
+    struct mEtc_mutex_args *args = (struct mEtc_mutex_args *)arg;
+    return (VALUE)rb_thread_call_without_gvl(args->func, args->arg, RUBY_UBF_IO, 0);
+}
+
+static void *
+mEtc_mutex_synchronize(void * (*func)(void *), void *arg)
+{
+    struct mEtc_mutex_args args;
+    args.func = func;
+    args.arg = arg;
+    return (void *)rb_mutex_synchronize(mEtc_mutex, mEtc_mutex_nogvl, (VALUE)&args);
+}
+
 /* call-seq:
  *	getlogin	->  String
  *
@@ -157,6 +182,37 @@ safe_setup_filesystem_str(const char *str)
 #endif
 
 #ifdef HAVE_GETPWENT
+static void *
+nogvl_getpwuid(void *uid)
+{
+    return getpwuid((uid_t)(VALUE)uid);
+}
+
+static void *
+nogvl_getpwnam(void *name)
+{
+    return getpwnam((const char *)name);
+}
+
+static void *
+nogvl_getpwent(void *_)
+{
+    return getpwent();
+}
+
+static void *
+nogvl_setpwent(void *_)
+{
+    setpwent();
+    return NULL;
+}
+
+static void *
+nogvl_endpwent(void *_)
+{
+    endpwent();
+    return NULL;
+}
 # ifdef __APPLE__
 #   define PW_TIME2VAL(t) INT2NUM((int)(t))
 # else
@@ -234,7 +290,7 @@ etc_getpwuid(int argc, VALUE *argv, VALUE obj)
     else {
 	uid = getuid();
     }
-    pwd = getpwuid(uid);
+    pwd = mEtc_mutex_synchronize(nogvl_getpwuid, (void *)(VALUE)uid);
     if (pwd == 0) rb_raise(rb_eArgError, "can't find user for %d", (int)uid);
     return setup_passwd(pwd);
 #else
@@ -264,7 +320,7 @@ etc_getpwnam(VALUE obj, VALUE nam)
     struct passwd *pwd;
     const char *p = StringValueCStr(nam);
 
-    pwd = getpwnam(p);
+    pwd = mEtc_mutex_synchronize(nogvl_getpwnam, (void *)p);
     if (pwd == 0) rb_raise(rb_eArgError, "can't find user for %"PRIsVALUE, nam);
     return setup_passwd(pwd);
 #else
@@ -277,7 +333,7 @@ static rb_atomic_t passwd_blocking;
 static VALUE
 passwd_ensure(VALUE _)
 {
-    endpwent();
+    mEtc_mutex_synchronize(nogvl_endpwent, NULL);
     if (RUBY_ATOMIC_EXCHANGE(passwd_blocking, 0) != 1) {
 	rb_raise(rb_eRuntimeError, "unexpected passwd_blocking");
     }
@@ -289,8 +345,8 @@ passwd_iterate(VALUE _)
 {
     struct passwd *pw;
 
-    setpwent();
-    while ((pw = getpwent()) != 0) {
+    mEtc_mutex_synchronize(nogvl_setpwent, NULL);
+    while ((pw = mEtc_mutex_synchronize(nogvl_getpwent, NULL)) != 0) {
 	rb_yield(setup_passwd(pw));
     }
     return Qnil;
@@ -335,7 +391,7 @@ etc_passwd(VALUE obj)
     if (rb_block_given_p()) {
 	each_passwd();
     }
-    else if ((pw = getpwent()) != 0) {
+    else if ((pw = mEtc_mutex_synchronize(nogvl_getpwent, NULL)) != 0) {
 	return setup_passwd(pw);
     }
 #endif
@@ -387,7 +443,7 @@ static VALUE
 etc_setpwent(VALUE obj)
 {
 #ifdef HAVE_GETPWENT
-    setpwent();
+    mEtc_mutex_synchronize(nogvl_setpwent, NULL);
 #endif
     return Qnil;
 }
@@ -402,7 +458,7 @@ static VALUE
 etc_endpwent(VALUE obj)
 {
 #ifdef HAVE_GETPWENT
-    endpwent();
+    mEtc_mutex_synchronize(nogvl_endpwent, NULL);
 #endif
     return Qnil;
 }
@@ -427,7 +483,7 @@ etc_getpwent(VALUE obj)
 #ifdef HAVE_GETPWENT
     struct passwd *pw;
 
-    if ((pw = getpwent()) != 0) {
+    if ((pw = mEtc_mutex_synchronize(nogvl_getpwent, NULL)) != 0) {
 	return setup_passwd(pw);
     }
 #endif
@@ -435,6 +491,38 @@ etc_getpwent(VALUE obj)
 }
 
 #ifdef HAVE_GETGRENT
+static void *
+nogvl_getgrgid(void *gid)
+{
+    return getgrgid((gid_t)(VALUE)gid);
+}
+
+static void *
+nogvl_getgrnam(void *name)
+{
+    return getgrnam((const char *)name);
+}
+
+static void *
+nogvl_getgrent(void *_)
+{
+    return getgrent();
+}
+
+static void *
+nogvl_setgrent(void *_)
+{
+    setgrent();
+    return NULL;
+}
+
+static void *
+nogvl_endgrent(void *_)
+{
+    endgrent();
+    return NULL;
+}
+
 static VALUE
 setup_group(struct group *grp)
 {
@@ -487,7 +575,7 @@ etc_getgrgid(int argc, VALUE *argv, VALUE obj)
     else {
 	gid = getgid();
     }
-    grp = getgrgid(gid);
+    grp = mEtc_mutex_synchronize(nogvl_getgrgid, (void *)(VALUE)gid);
     if (grp == 0) rb_raise(rb_eArgError, "can't find group for %d", (int)gid);
     return setup_group(grp);
 #else
@@ -518,7 +606,7 @@ etc_getgrnam(VALUE obj, VALUE nam)
     struct group *grp;
     const char *p = StringValueCStr(nam);
 
-    grp = getgrnam(p);
+    grp = mEtc_mutex_synchronize(nogvl_getgrnam, (void *)p);
     if (grp == 0) rb_raise(rb_eArgError, "can't find group for %"PRIsVALUE, nam);
     return setup_group(grp);
 #else
@@ -531,7 +619,7 @@ static rb_atomic_t group_blocking;
 static VALUE
 group_ensure(VALUE _)
 {
-    endgrent();
+    mEtc_mutex_synchronize(nogvl_endgrent, NULL);
     if (RUBY_ATOMIC_EXCHANGE(group_blocking, 0) != 1) {
 	rb_raise(rb_eRuntimeError, "unexpected group_blocking");
     }
@@ -543,8 +631,8 @@ group_iterate(VALUE _)
 {
     struct group *pw;
 
-    setgrent();
-    while ((pw = getgrent()) != 0) {
+    mEtc_mutex_synchronize(nogvl_setgrent, NULL);
+    while ((pw = mEtc_mutex_synchronize(nogvl_getgrent, NULL)) != 0) {
 	rb_yield(setup_group(pw));
     }
     return Qnil;
@@ -589,7 +677,7 @@ etc_group(VALUE obj)
     if (rb_block_given_p()) {
 	each_group();
     }
-    else if ((grp = getgrent()) != 0) {
+    else if ((grp = mEtc_mutex_synchronize(nogvl_getgrent, NULL)) != 0) {
 	return setup_group(grp);
     }
 #endif
@@ -639,7 +727,7 @@ static VALUE
 etc_setgrent(VALUE obj)
 {
 #ifdef HAVE_GETGRENT
-    setgrent();
+    mEtc_mutex_synchronize(nogvl_setgrent, NULL);
 #endif
     return Qnil;
 }
@@ -654,7 +742,7 @@ static VALUE
 etc_endgrent(VALUE obj)
 {
 #ifdef HAVE_GETGRENT
-    endgrent();
+    mEtc_mutex_synchronize(nogvl_endgrent, NULL);
 #endif
     return Qnil;
 }
@@ -678,7 +766,7 @@ etc_getgrent(VALUE obj)
 #ifdef HAVE_GETGRENT
     struct group *gr;
 
-    if ((gr = getgrent()) != 0) {
+    if ((gr = mEtc_mutex_synchronize(nogvl_getgrent, NULL)) != 0) {
 	return setup_group(gr);
     }
 #endif
@@ -1156,6 +1244,9 @@ Init_etc(void)
     /* The version */
     rb_define_const(mEtc, "VERSION", rb_str_new_cstr(RUBY_ETC_VERSION));
     init_constants(mEtc);
+
+    mEtc_mutex = rb_mutex_new();
+    rb_gc_register_mark_object(mEtc_mutex);
 
     rb_define_module_function(mEtc, "getlogin", etc_getlogin, 0);
 
