@@ -105,7 +105,6 @@ struct mEtc_mutex_args {
 static VALUE
 mEtc_mutex_nogvl(VALUE arg)
 {
-
     struct mEtc_mutex_args *args = (struct mEtc_mutex_args *)arg;
     return (VALUE)rb_thread_call_without_gvl(args->func, args->arg, RUBY_UBF_IO, 0);
 }
