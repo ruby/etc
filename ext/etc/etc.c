@@ -48,6 +48,19 @@ static VALUE sGroup;
 #define HAVE_UNAME 1
 #endif
 
+#if defined(TEST_THREAD_SAFETY)
+#define mutex_synchronize mutex_synchronize_thread_schedule
+static VALUE
+mutex_synchronize_thread_schedule(VALUE mutex, VALUE (*func)(VALUE arg), VALUE arg)
+{
+    VALUE v = rb_mutex_synchronize(mutex, func, arg);
+    rb_thread_schedule();
+    return v;
+}
+#else
+#define mutex_synchronize rb_mutex_synchronize
+#endif
+
 #ifdef STDC_HEADERS
 # include <stdlib.h>
 #else
@@ -115,7 +128,7 @@ mEtc_mutex_synchronize(void * (*func)(void *), void *arg)
     struct mEtc_mutex_args args;
     args.func = func;
     args.arg = arg;
-    return (void *)rb_mutex_synchronize(mEtc_mutex, mEtc_mutex_nogvl, (VALUE)&args);
+    return (void *)mutex_synchronize(mEtc_mutex, mEtc_mutex_nogvl, (VALUE)&args);
 }
 
 /* call-seq:
@@ -255,6 +268,34 @@ setup_passwd(struct passwd *pwd)
 			 0		/*dummy*/
 	);
 }
+
+static VALUE
+setup_passwd_getpwuid(VALUE uid)
+{
+    struct passwd *pwd = rb_thread_call_without_gvl(nogvl_getpwuid, (void *)uid, RUBY_UBF_IO, 0);
+    if (pwd == 0) rb_raise(rb_eArgError, "can't find user for %d", (int)uid);
+    return setup_passwd(pwd);
+}
+
+static VALUE
+setup_passwd_getpwnam(VALUE nam)
+{
+    const char *p = StringValueCStr(nam);
+    struct passwd *pwd = rb_thread_call_without_gvl(nogvl_getpwnam, (void *)p, RUBY_UBF_IO, 0);
+    RB_GC_GUARD(nam);
+    if (pwd == 0) rb_raise(rb_eArgError, "can't find user for %"PRIsVALUE, nam);
+    return setup_passwd(pwd);
+}
+
+static VALUE
+setup_passwd_getpwent(VALUE _)
+{
+    struct passwd *pw;
+    if ((pw = rb_thread_call_without_gvl(nogvl_getpwent, NULL, RUBY_UBF_IO, 0)) != 0)
+	return setup_passwd(pw);
+    else
+        return Qnil;
+}
 #endif
 
 /* call-seq:
@@ -281,7 +322,6 @@ etc_getpwuid(int argc, VALUE *argv, VALUE obj)
 #if defined(HAVE_GETPWENT)
     VALUE id;
     rb_uid_t uid;
-    struct passwd *pwd;
 
     if (rb_scan_args(argc, argv, "01", &id) == 1) {
 	uid = NUM2UIDT(id);
@@ -289,9 +329,7 @@ etc_getpwuid(int argc, VALUE *argv, VALUE obj)
     else {
 	uid = getuid();
     }
-    pwd = mEtc_mutex_synchronize(nogvl_getpwuid, (void *)(VALUE)uid);
-    if (pwd == 0) rb_raise(rb_eArgError, "can't find user for %d", (int)uid);
-    return setup_passwd(pwd);
+    return mutex_synchronize(mEtc_mutex, setup_passwd_getpwuid, (VALUE)uid);
 #else
     return Qnil;
 #endif
@@ -316,12 +354,7 @@ static VALUE
 etc_getpwnam(VALUE obj, VALUE nam)
 {
 #ifdef HAVE_GETPWENT
-    struct passwd *pwd;
-    const char *p = StringValueCStr(nam);
-
-    pwd = mEtc_mutex_synchronize(nogvl_getpwnam, (void *)p);
-    if (pwd == 0) rb_raise(rb_eArgError, "can't find user for %"PRIsVALUE, nam);
-    return setup_passwd(pwd);
+    return mutex_synchronize(mEtc_mutex, setup_passwd_getpwnam, nam);
 #else
     return Qnil;
 #endif
@@ -342,11 +375,11 @@ passwd_ensure(VALUE _)
 static VALUE
 passwd_iterate(VALUE _)
 {
-    struct passwd *pw;
+    VALUE pw;
 
     mEtc_mutex_synchronize(nogvl_setpwent, NULL);
-    while ((pw = mEtc_mutex_synchronize(nogvl_getpwent, NULL)) != 0) {
-	rb_yield(setup_passwd(pw));
+    while ((pw = mutex_synchronize(mEtc_mutex, setup_passwd_getpwent, Qnil)) != Qnil) {
+	rb_yield(pw);
     }
     return Qnil;
 }
@@ -385,16 +418,13 @@ static VALUE
 etc_passwd(VALUE obj)
 {
 #ifdef HAVE_GETPWENT
-    struct passwd *pw;
-
     if (rb_block_given_p()) {
 	each_passwd();
     }
-    else if ((pw = mEtc_mutex_synchronize(nogvl_getpwent, NULL)) != 0) {
-	return setup_passwd(pw);
-    }
-#endif
+    return mutex_synchronize(mEtc_mutex, setup_passwd_getpwent, Qnil);
+#else
     return Qnil;
+#endif
 }
 
 /* call-seq:
@@ -480,13 +510,10 @@ static VALUE
 etc_getpwent(VALUE obj)
 {
 #ifdef HAVE_GETPWENT
-    struct passwd *pw;
-
-    if ((pw = mEtc_mutex_synchronize(nogvl_getpwent, NULL)) != 0) {
-	return setup_passwd(pw);
-    }
-#endif
+    return mutex_synchronize(mEtc_mutex, setup_passwd_getpwent, Qnil);
+#else
     return Qnil;
+#endif
 }
 
 #ifdef HAVE_GETGRENT
@@ -542,6 +569,34 @@ setup_group(struct group *grp)
 			 GIDT2NUM(grp->gr_gid),
 			 mem);
 }
+
+static VALUE
+setup_group_getgrgid(VALUE gid)
+{
+    struct group *grp = rb_thread_call_without_gvl(nogvl_getgrgid, (void *)gid, RUBY_UBF_IO, 0);
+    if (grp == 0) rb_raise(rb_eArgError, "can't find group for %d", (int)gid);
+    return setup_group(grp);
+}
+
+static VALUE
+setup_group_getgrnam(VALUE nam)
+{
+    const char *p = StringValueCStr(nam);
+    struct group *grp = rb_thread_call_without_gvl(nogvl_getgrnam, (void *)p, RUBY_UBF_IO, 0);
+    RB_GC_GUARD(nam);
+    if (grp == 0) rb_raise(rb_eArgError, "can't find group for %"PRIsVALUE, nam);
+    return setup_group(grp);
+}
+
+static VALUE
+setup_group_getgrent(VALUE _)
+{
+    struct group *grp;
+    if ((grp = rb_thread_call_without_gvl(nogvl_getgrent, NULL, RUBY_UBF_IO, 0)) != 0)
+        return setup_group(grp);
+    else
+        return Qnil;
+}
 #endif
 
 /* call-seq:
@@ -566,7 +621,6 @@ etc_getgrgid(int argc, VALUE *argv, VALUE obj)
 #ifdef HAVE_GETGRENT
     VALUE id;
     gid_t gid;
-    struct group *grp;
 
     if (rb_scan_args(argc, argv, "01", &id) == 1) {
 	gid = NUM2GIDT(id);
@@ -574,9 +628,7 @@ etc_getgrgid(int argc, VALUE *argv, VALUE obj)
     else {
 	gid = getgid();
     }
-    grp = mEtc_mutex_synchronize(nogvl_getgrgid, (void *)(VALUE)gid);
-    if (grp == 0) rb_raise(rb_eArgError, "can't find group for %d", (int)gid);
-    return setup_group(grp);
+    return mutex_synchronize(mEtc_mutex, setup_group_getgrgid, (VALUE)gid);
 #else
     return Qnil;
 #endif
@@ -602,12 +654,7 @@ static VALUE
 etc_getgrnam(VALUE obj, VALUE nam)
 {
 #ifdef HAVE_GETGRENT
-    struct group *grp;
-    const char *p = StringValueCStr(nam);
-
-    grp = mEtc_mutex_synchronize(nogvl_getgrnam, (void *)p);
-    if (grp == 0) rb_raise(rb_eArgError, "can't find group for %"PRIsVALUE, nam);
-    return setup_group(grp);
+    return mutex_synchronize(mEtc_mutex, setup_group_getgrnam, nam);
 #else
     return Qnil;
 #endif
@@ -628,11 +675,11 @@ group_ensure(VALUE _)
 static VALUE
 group_iterate(VALUE _)
 {
-    struct group *pw;
+    VALUE grp;
 
     mEtc_mutex_synchronize(nogvl_setgrent, NULL);
-    while ((pw = mEtc_mutex_synchronize(nogvl_getgrent, NULL)) != 0) {
-	rb_yield(setup_group(pw));
+    while ((grp = mutex_synchronize(mEtc_mutex, setup_group_getgrent, Qnil)) != Qnil) {
+	rb_yield(grp);
     }
     return Qnil;
 }
@@ -671,16 +718,13 @@ static VALUE
 etc_group(VALUE obj)
 {
 #ifdef HAVE_GETGRENT
-    struct group *grp;
-
     if (rb_block_given_p()) {
 	each_group();
     }
-    else if ((grp = mEtc_mutex_synchronize(nogvl_getgrent, NULL)) != 0) {
-	return setup_group(grp);
-    }
-#endif
+    return mutex_synchronize(mEtc_mutex, setup_group_getgrent, Qnil);
+#else
     return Qnil;
+#endif
 }
 
 #ifdef HAVE_GETGRENT
@@ -763,13 +807,10 @@ static VALUE
 etc_getgrent(VALUE obj)
 {
 #ifdef HAVE_GETGRENT
-    struct group *gr;
-
-    if ((gr = mEtc_mutex_synchronize(nogvl_getgrent, NULL)) != 0) {
-	return setup_group(gr);
-    }
-#endif
+    return mutex_synchronize(mEtc_mutex, setup_group_getgrent, Qnil);
+#else
     return Qnil;
+#endif
 }
 
 #define numberof(array) (sizeof(array) / sizeof(*(array)))
