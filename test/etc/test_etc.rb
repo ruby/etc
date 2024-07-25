@@ -52,7 +52,7 @@ class TestEtc < Test::Unit::TestCase
     uids = []
     Etc.passwd {|s| uids << s.uid}
     uids.uniq!
-    uids = uids[-MAX_THREADS..-1]
+    return unless uids = uids[-MAX_THREADS..-1]
 
     uids.map do |uid|
       Thread.new do
@@ -79,7 +79,7 @@ class TestEtc < Test::Unit::TestCase
       (passwd[s.name] ||= []) << s.uid unless /\A\+/ =~ s.name
     end
     passwd = passwd.to_a.reject{|name, uids| uids.length > 1}
-    passwd = passwd[-MAX_THREADS..-1]
+    return unless passwd = passwd[-MAX_THREADS..-1]
 
     passwd.map do |name, uids|
       uid = uids.first
@@ -135,7 +135,7 @@ class TestEtc < Test::Unit::TestCase
     gids = []
     Etc.group {|g| gids << g.gid}
     gids.uniq!
-    gids = gids[-MAX_THREADS..-1]
+    return unless gids = gids[-MAX_THREADS..-1]
 
     gids.map do |gid|
       Thread.new do
@@ -162,7 +162,7 @@ class TestEtc < Test::Unit::TestCase
       (groups[s.name] ||= []) << s.gid unless /\A\+/ =~ s.name
     end
     groups = groups.to_a.reject{|name, gids| gids.length > 1}
-    groups = groups[-MAX_THREADS..-1]
+    return unless groups = groups[-MAX_THREADS..-1]
 
     groups.map do |name, gids|
       gid = gids.first
