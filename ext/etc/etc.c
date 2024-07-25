@@ -11,6 +11,7 @@
 #include "ruby/encoding.h"
 #include "ruby/io.h"
 #include "ruby/thread.h"
+#include "ruby/thread_native.h"
 
 #include <sys/types.h>
 #ifdef HAVE_UNISTD_H
@@ -46,19 +47,6 @@ static VALUE sGroup;
 #define CSIDL_COMMON_APPDATA 35
 #endif
 #define HAVE_UNAME 1
-#endif
-
-#if defined(TEST_THREAD_SAFETY)
-#define mutex_synchronize mutex_synchronize_thread_schedule
-static VALUE
-mutex_synchronize_thread_schedule(VALUE mutex, VALUE (*func)(VALUE arg), VALUE arg)
-{
-    VALUE v = rb_mutex_synchronize(mutex, func, arg);
-    rb_thread_schedule();
-    return v;
-}
-#else
-#define mutex_synchronize rb_mutex_synchronize
 #endif
 
 #ifdef STDC_HEADERS
@@ -108,7 +96,19 @@ atomic_exchange(volatile rb_atomic_t *var, rb_atomic_t newval)
 }
 #endif
 
-static VALUE mEtc_mutex;
+static rb_nativethread_lock_t mEtc_lock;
+static rb_nativethread_lock_t *mEtc_mutex;
+
+static VALUE
+mutex_synchronize(VALUE (*func)(VALUE), VALUE arg)
+{
+    rb_thread_call_without_gvl((void *(*)(void *))rb_nativethread_lock_lock, mEtc_mutex, RUBY_UBF_IO, 0);
+    VALUE v = rb_ensure(func, arg, (VALUE(*)(VALUE))rb_nativethread_lock_unlock, (VALUE)mEtc_mutex);
+#if defined(TEST_THREAD_SAFETY)
+    rb_thread_schedule();
+#endif
+    return v;
+}
 
 struct mEtc_mutex_args {
     void * (*func)(void *);
@@ -128,7 +128,7 @@ mEtc_mutex_synchronize(void * (*func)(void *), void *arg)
     struct mEtc_mutex_args args;
     args.func = func;
     args.arg = arg;
-    return (void *)mutex_synchronize(mEtc_mutex, mEtc_mutex_nogvl, (VALUE)&args);
+    return (void *)mutex_synchronize(mEtc_mutex_nogvl, (VALUE)&args);
 }
 
 /* call-seq:
@@ -329,7 +329,7 @@ etc_getpwuid(int argc, VALUE *argv, VALUE obj)
     else {
 	uid = getuid();
     }
-    return mutex_synchronize(mEtc_mutex, setup_passwd_getpwuid, (VALUE)uid);
+    return mutex_synchronize(setup_passwd_getpwuid, (VALUE)uid);
 #else
     return Qnil;
 #endif
@@ -354,7 +354,7 @@ static VALUE
 etc_getpwnam(VALUE obj, VALUE nam)
 {
 #ifdef HAVE_GETPWENT
-    return mutex_synchronize(mEtc_mutex, setup_passwd_getpwnam, nam);
+    return mutex_synchronize(setup_passwd_getpwnam, nam);
 #else
     return Qnil;
 #endif
@@ -378,7 +378,7 @@ passwd_iterate(VALUE _)
     VALUE pw;
 
     mEtc_mutex_synchronize(nogvl_setpwent, NULL);
-    while ((pw = mutex_synchronize(mEtc_mutex, setup_passwd_getpwent, Qnil)) != Qnil) {
+    while ((pw = mutex_synchronize(setup_passwd_getpwent, Qnil)) != Qnil) {
 	rb_yield(pw);
     }
     return Qnil;
@@ -421,7 +421,7 @@ etc_passwd(VALUE obj)
     if (rb_block_given_p()) {
 	each_passwd();
     }
-    return mutex_synchronize(mEtc_mutex, setup_passwd_getpwent, Qnil);
+    return mutex_synchronize(setup_passwd_getpwent, Qnil);
 #else
     return Qnil;
 #endif
@@ -510,7 +510,7 @@ static VALUE
 etc_getpwent(VALUE obj)
 {
 #ifdef HAVE_GETPWENT
-    return mutex_synchronize(mEtc_mutex, setup_passwd_getpwent, Qnil);
+    return mutex_synchronize(setup_passwd_getpwent, Qnil);
 #else
     return Qnil;
 #endif
@@ -628,7 +628,7 @@ etc_getgrgid(int argc, VALUE *argv, VALUE obj)
     else {
 	gid = getgid();
     }
-    return mutex_synchronize(mEtc_mutex, setup_group_getgrgid, (VALUE)gid);
+    return mutex_synchronize(setup_group_getgrgid, (VALUE)gid);
 #else
     return Qnil;
 #endif
@@ -654,7 +654,7 @@ static VALUE
 etc_getgrnam(VALUE obj, VALUE nam)
 {
 #ifdef HAVE_GETGRENT
-    return mutex_synchronize(mEtc_mutex, setup_group_getgrnam, nam);
+    return mutex_synchronize(setup_group_getgrnam, nam);
 #else
     return Qnil;
 #endif
@@ -678,7 +678,7 @@ group_iterate(VALUE _)
     VALUE grp;
 
     mEtc_mutex_synchronize(nogvl_setgrent, NULL);
-    while ((grp = mutex_synchronize(mEtc_mutex, setup_group_getgrent, Qnil)) != Qnil) {
+    while ((grp = mutex_synchronize(setup_group_getgrent, Qnil)) != Qnil) {
 	rb_yield(grp);
     }
     return Qnil;
@@ -721,7 +721,7 @@ etc_group(VALUE obj)
     if (rb_block_given_p()) {
 	each_group();
     }
-    return mutex_synchronize(mEtc_mutex, setup_group_getgrent, Qnil);
+    return mutex_synchronize(setup_group_getgrent, Qnil);
 #else
     return Qnil;
 #endif
@@ -807,7 +807,7 @@ static VALUE
 etc_getgrent(VALUE obj)
 {
 #ifdef HAVE_GETGRENT
-    return mutex_synchronize(mEtc_mutex, setup_group_getgrent, Qnil);
+    return mutex_synchronize(setup_group_getgrent, Qnil);
 #else
     return Qnil;
 #endif
@@ -1297,8 +1297,8 @@ Init_etc(void)
     rb_define_const(mEtc, "VERSION", rb_str_new_cstr(RUBY_ETC_VERSION));
     init_constants(mEtc);
 
-    mEtc_mutex = rb_mutex_new();
-    rb_gc_register_mark_object(mEtc_mutex);
+    mEtc_mutex = &mEtc_lock;
+    rb_nativethread_lock_initialize(mEtc_mutex);
 
     rb_define_module_function(mEtc, "getlogin", etc_getlogin, 0);
 
