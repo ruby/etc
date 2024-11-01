@@ -10,6 +10,7 @@
 #include "ruby.h"
 #include "ruby/encoding.h"
 #include "ruby/io.h"
+#include "ruby/thread.h"
 
 #include <sys/types.h>
 #ifdef HAVE_UNISTD_H
@@ -58,6 +59,16 @@ RUBY_EXTERN char *getlogin(void);
 
 #define RUBY_ETC_VERSION "1.4.4"
 
+# if defined(HAVE_GETPWNAM_R) || defined(HAVE_GETPWUID_R)
+#  define GETPW_R_SIZE_DEFAULT 0x1000
+#  define GETPW_R_SIZE_LIMIT  0x10000
+#  if defined(_SC_GETPW_R_SIZE_MAX)
+#   define GETPW_R_SIZE_INIT sysconf(_SC_GETPW_R_SIZE_MAX)
+#  else
+#   define GETPW_R_SIZE_INIT GETPW_R_SIZE_DEFAULT
+#  endif
+# endif
+
 #ifdef HAVE_RB_DEPRECATE_CONSTANT
 void rb_deprecate_constant(VALUE mod, const char *name);
 #else
@@ -93,6 +104,19 @@ atomic_exchange(volatile rb_atomic_t *var, rb_atomic_t newval)
     return oldval;
 }
 #endif
+
+#if defined(TEST_THREAD_SAFETY)
+static void *
+WITHOUT_GVL(void *(*func)(void *), void *arg)
+{
+    void *p = rb_thread_call_without_gvl(func, arg, RUBY_UBF_IO, 0);
+    rb_thread_schedule();
+    return p;
+}
+#else
+# define WITHOUT_GVL(func, arg) rb_thread_call_without_gvl((func), (arg), RUBY_UBF_IO, 0)
+#endif
+#define WITHOUT_GVL_INT(func, arg) (int)(VALUE)WITHOUT_GVL((func), (arg))
 
 /* call-seq:
  *	getlogin	->  String
@@ -157,6 +181,19 @@ safe_setup_filesystem_str(const char *str)
 #endif
 
 #ifdef HAVE_GETPWENT
+static void *
+nogvl_setpwent(void *_)
+{
+    setpwent();
+    return NULL;
+}
+
+static void *
+nogvl_endpwent(void *_)
+{
+    endpwent();
+    return NULL;
+}
 # ifdef __APPLE__
 #   define PW_TIME2VAL(t) INT2NUM((int)(t))
 # else
@@ -200,6 +237,56 @@ setup_passwd(struct passwd *pwd)
 			 0		/*dummy*/
 	);
 }
+
+#if HAVE_GETPWUID_R
+struct getpwuid_r_args {
+    uid_t uid;
+    char *buf;
+    size_t bufsize;
+    struct passwd *result;
+    struct passwd pwstore;
+};
+
+# define GETPWUID_R_ARGS(uid_, buf_, bufsize_) (struct getpwuid_r_args) \
+    {.uid = uid_, .buf = buf_, .bufsize = bufsize_, .result = NULL}
+
+static void *
+nogvl_getpwuid_r(void *args)
+{
+    struct getpwuid_r_args *arg = args;
+    return (void *)(VALUE)getpwuid_r(arg->uid, &arg->pwstore, arg->buf, arg->bufsize, &arg->result);
+}
+#endif
+
+# ifdef HAVE_GETPWNAM_R
+struct getpwnam_r_args {
+    char *login;
+    char *buf;
+    size_t bufsize;
+    struct passwd *result;
+    struct passwd pwstore;
+};
+
+# define GETPWNAM_R_ARGS(login_, buf_, bufsize_) (struct getpwnam_r_args) \
+    {.login = login_, .buf = buf_, .bufsize = bufsize_, .result = NULL}
+
+static void *
+nogvl_getpwnam_r(void *args)
+{
+    struct getpwnam_r_args *arg = args;
+    return (void *)(VALUE)getpwnam_r(arg->login, &arg->pwstore, arg->buf, arg->bufsize, &arg->result);
+}
+# endif
+
+static VALUE
+setup_passwd_getpwent(void)
+{
+    struct passwd *pw;
+    if ((pw = getpwent()) != 0)
+	return setup_passwd(pw);
+    else
+        return Qnil;
+}
 #endif
 
 /* call-seq:
@@ -226,7 +313,6 @@ etc_getpwuid(int argc, VALUE *argv, VALUE obj)
 #if defined(HAVE_GETPWENT)
     VALUE id;
     rb_uid_t uid;
-    struct passwd *pwd;
 
     if (rb_scan_args(argc, argv, "01", &id) == 1) {
 	uid = NUM2UIDT(id);
@@ -234,9 +320,56 @@ etc_getpwuid(int argc, VALUE *argv, VALUE obj)
     else {
 	uid = getuid();
     }
-    pwd = getpwuid(uid);
+
+# ifdef HAVE_GETPWUID_R
+    char *bufid;
+    long bufsizeid = GETPW_R_SIZE_INIT;  /* maybe -1 */
+
+    if (bufsizeid < 0)
+        bufsizeid = GETPW_R_SIZE_DEFAULT;
+
+    VALUE getpwid_tmp = rb_str_tmp_new(bufsizeid);
+
+    bufid = RSTRING_PTR(getpwid_tmp);
+    bufsizeid = rb_str_capacity(getpwid_tmp);
+    rb_str_set_len(getpwid_tmp, bufsizeid);
+    struct getpwuid_r_args args = GETPWUID_R_ARGS(uid, bufid, bufsizeid);
+
+    int eid;
+    errno = 0;
+    while ((eid = WITHOUT_GVL_INT(nogvl_getpwuid_r, &args)) != 0) {
+
+        if (eid == ENOENT || eid== ESRCH || eid == EBADF || eid == EPERM) {
+            /* not found; non-errors */
+            rb_str_resize(getpwid_tmp, 0);
+            return Qnil;
+        }
+
+        if (eid != ERANGE || args.bufsize >= GETPW_R_SIZE_LIMIT) {
+            rb_str_resize(getpwid_tmp, 0);
+            rb_syserr_fail(eid, "getpwuid_r");
+        }
+
+        rb_str_modify_expand(getpwid_tmp, args.bufsize);
+        args.buf = RSTRING_PTR(getpwid_tmp);
+        args.bufsize = (size_t)rb_str_capacity(getpwid_tmp);
+    }
+
+    if (args.result == NULL) {
+        /* no record in the password database for the uid */
+        rb_str_resize(getpwid_tmp, 0);
+        return Qnil;
+    }
+
+    /* found it */
+    VALUE result = setup_passwd(args.result);
+    rb_str_resize(getpwid_tmp, 0);
+    return result;
+# else
+    struct passwd *pwd = getpwuid((uid_t)uid);
     if (pwd == 0) rb_raise(rb_eArgError, "can't find user for %d", (int)uid);
     return setup_passwd(pwd);
+# endif
 #else
     return Qnil;
 #endif
@@ -261,12 +394,59 @@ static VALUE
 etc_getpwnam(VALUE obj, VALUE nam)
 {
 #ifdef HAVE_GETPWENT
-    struct passwd *pwd;
-    const char *p = StringValueCStr(nam);
+# ifdef HAVE_GETPWNAM_R
+    char *login = RSTRING_PTR(nam);
+    char *bufnm;
+    long bufsizenm = GETPW_R_SIZE_INIT;  /* maybe -1 */
 
-    pwd = getpwnam(p);
+    if (bufsizenm < 0)
+        bufsizenm = GETPW_R_SIZE_DEFAULT;
+
+    VALUE getpwnm_tmp = rb_str_tmp_new(bufsizenm);
+
+    bufnm = RSTRING_PTR(getpwnm_tmp);
+    bufsizenm = rb_str_capacity(getpwnm_tmp);
+    rb_str_set_len(getpwnm_tmp, bufsizenm);
+    struct getpwnam_r_args args = GETPWNAM_R_ARGS(login, bufnm, bufsizenm);
+
+    int enm;
+    errno = 0;
+    while ((enm = WITHOUT_GVL_INT(nogvl_getpwnam_r, &args)) != 0) {
+
+        if (enm == ENOENT || enm== ESRCH || enm == EBADF || enm == EPERM) {
+            /* not found; non-errors */
+            rb_str_resize(getpwnm_tmp, 0);
+            return Qnil;
+        }
+
+        if (enm != ERANGE || bufsizenm >= GETPW_R_SIZE_LIMIT) {
+            rb_str_resize(getpwnm_tmp, 0);
+            rb_syserr_fail(enm, "getpwnam_r");
+        }
+
+        rb_str_modify_expand(getpwnm_tmp, bufsizenm);
+        args.buf = RSTRING_PTR(getpwnm_tmp);
+        args.bufsize = (size_t)rb_str_capacity(getpwnm_tmp);
+    }
+
+    if (args.result == NULL) {
+        /* no record in the password database for the login name */
+        rb_str_resize(getpwnm_tmp, 0);
+        return Qnil;
+    }
+
+    /* found it */
+    VALUE result = setup_passwd(args.result);
+    rb_str_resize(getpwnm_tmp, 0);
+    RB_GC_GUARD(nam);
+    return result;
+# else
+    const char *p = StringValueCStr(nam);
+    struct passwd *pwd = getpwnam(p);
     if (pwd == 0) rb_raise(rb_eArgError, "can't find user for %"PRIsVALUE, nam);
+    RB_GC_GUARD(nam);
     return setup_passwd(pwd);
+# endif
 #else
     return Qnil;
 #endif
@@ -277,7 +457,7 @@ static rb_atomic_t passwd_blocking;
 static VALUE
 passwd_ensure(VALUE _)
 {
-    endpwent();
+    WITHOUT_GVL(nogvl_endpwent, NULL);
     if (RUBY_ATOMIC_EXCHANGE(passwd_blocking, 0) != 1) {
 	rb_raise(rb_eRuntimeError, "unexpected passwd_blocking");
     }
@@ -287,11 +467,11 @@ passwd_ensure(VALUE _)
 static VALUE
 passwd_iterate(VALUE _)
 {
-    struct passwd *pw;
+    VALUE pw;
 
-    setpwent();
-    while ((pw = getpwent()) != 0) {
-	rb_yield(setup_passwd(pw));
+    WITHOUT_GVL(nogvl_setpwent, NULL);
+    while ((pw = setup_passwd_getpwent()) != Qnil) {
+	rb_yield(pw);
     }
     return Qnil;
 }
@@ -330,16 +510,13 @@ static VALUE
 etc_passwd(VALUE obj)
 {
 #ifdef HAVE_GETPWENT
-    struct passwd *pw;
-
     if (rb_block_given_p()) {
 	each_passwd();
     }
-    else if ((pw = getpwent()) != 0) {
-	return setup_passwd(pw);
-    }
-#endif
+    return setup_passwd_getpwent();
+#else
     return Qnil;
+#endif
 }
 
 /* call-seq:
@@ -387,7 +564,7 @@ static VALUE
 etc_setpwent(VALUE obj)
 {
 #ifdef HAVE_GETPWENT
-    setpwent();
+    WITHOUT_GVL(nogvl_setpwent, NULL);
 #endif
     return Qnil;
 }
@@ -402,7 +579,7 @@ static VALUE
 etc_endpwent(VALUE obj)
 {
 #ifdef HAVE_GETPWENT
-    endpwent();
+    WITHOUT_GVL(nogvl_endpwent, NULL);
 #endif
     return Qnil;
 }
@@ -425,16 +602,76 @@ static VALUE
 etc_getpwent(VALUE obj)
 {
 #ifdef HAVE_GETPWENT
-    struct passwd *pw;
-
-    if ((pw = getpwent()) != 0) {
-	return setup_passwd(pw);
-    }
-#endif
+    return setup_passwd_getpwent();
+#else
     return Qnil;
+#endif
 }
 
 #ifdef HAVE_GETGRENT
+
+# if (defined(HAVE_GETGRNAM_R) || defined(HAVE_GETGRGID_R)) && defined(_SC_GETGR_R_SIZE_MAX)
+#  define GETGR_R_SIZE_INIT sysconf(_SC_GETGR_R_SIZE_MAX)
+#  define GETGR_R_SIZE_DEFAULT 0x1000
+#  define GETGR_R_SIZE_LIMIT  0x10000
+# else
+#  define GETGR_R_SIZE_INIT -1
+# endif
+
+#if HAVE_GETGRGID_R
+struct getgrgid_r_args {
+    gid_t gid;
+    char *buf;
+    size_t bufsize;
+    struct group *result;
+    struct group grp;
+};
+
+# define GETGRGID_R_ARGS(gid_, buf_, bufsize_) (struct getgrgid_r_args) \
+    {.gid = gid_, .buf = buf_, .bufsize = bufsize_, .result = NULL}
+
+static void *
+nogvl_getgrgid_r(void *args)
+{
+    struct getgrgid_r_args *arg = args;
+    return (void *)(VALUE)getgrgid_r(arg->gid, &arg->grp, arg->buf, arg->bufsize, &arg->result);
+}
+#endif
+
+# ifdef HAVE_GETGRNAM_R
+struct getgrnam_r_args {
+    const char *login;
+    char *buf;
+    size_t bufsize;
+    struct group *result;
+    struct group grp;
+};
+
+# define GETGRNAM_R_ARGS(login_, buf_, bufsize_) (struct getgrnam_r_args) \
+    {.login = login_, .buf = buf_, .bufsize = bufsize_, .result = NULL}
+
+static void *
+nogvl_getgrnam_r(void *args)
+{
+    struct getgrnam_r_args *arg = args;
+    return (void *)(VALUE)getgrnam_r(arg->login, &arg->grp, arg->buf, arg->bufsize, &arg->result);
+}
+# endif
+
+static void *
+nogvl_setgrent(void *_)
+{
+    setgrent();
+    return NULL;
+}
+
+static void *
+nogvl_endgrent(void *_)
+{
+    endgrent();
+    return NULL;
+}
+
 static VALUE
 setup_group(struct group *grp)
 {
@@ -454,6 +691,16 @@ setup_group(struct group *grp)
 #endif
 			 GIDT2NUM(grp->gr_gid),
 			 mem);
+}
+
+static VALUE
+setup_group_getgrent(void)
+{
+    struct group *grp;
+    if ((grp = getgrent()) != 0)
+        return setup_group(grp);
+    else
+        return Qnil;
 }
 #endif
 
@@ -479,7 +726,6 @@ etc_getgrgid(int argc, VALUE *argv, VALUE obj)
 #ifdef HAVE_GETGRENT
     VALUE id;
     gid_t gid;
-    struct group *grp;
 
     if (rb_scan_args(argc, argv, "01", &id) == 1) {
 	gid = NUM2GIDT(id);
@@ -487,9 +733,42 @@ etc_getgrgid(int argc, VALUE *argv, VALUE obj)
     else {
 	gid = getgid();
     }
+    struct group *grp;
+# ifdef HAVE_GETGRGID_R
+    char *getgr_buf;
+    long getgr_buf_len;
+    int e;
+    getgr_buf_len = GETGR_R_SIZE_INIT;
+    if (getgr_buf_len < 0) getgr_buf_len = GETGR_R_SIZE_DEFAULT;
+    VALUE getgr_tmp = rb_str_tmp_new(getgr_buf_len);
+    getgr_buf = RSTRING_PTR(getgr_tmp);
+    getgr_buf_len = rb_str_capacity(getgr_tmp);
+    rb_str_set_len(getgr_tmp, getgr_buf_len);
+    errno = 0;
+    struct getgrgid_r_args args = GETGRGID_R_ARGS(gid, getgr_buf, getgr_buf_len);
+
+    while ((e = WITHOUT_GVL_INT(nogvl_getgrgid_r, &args)) != 0) {
+        if (e != ERANGE || args.bufsize >= GETGR_R_SIZE_LIMIT) {
+            rb_str_resize(getgr_tmp, 0);
+            rb_syserr_fail(e, "getgrnam_r");
+        }
+        rb_str_modify_expand(getgr_tmp, args.bufsize);
+        args.buf = RSTRING_PTR(getgr_tmp);
+        args.bufsize = (size_t)rb_str_capacity(getgr_tmp);
+    }
+    grp = args.result;
+    if (grp == NULL) {
+        rb_str_resize(getgr_tmp, 0);
+        rb_raise(rb_eArgError, "can't find group for %d", (int)gid);
+    }
+    VALUE group = setup_group(args.result);
+    rb_str_resize(getgr_tmp, 0);
+    return group;
+# else
     grp = getgrgid(gid);
-    if (grp == 0) rb_raise(rb_eArgError, "can't find group for %d", (int)gid);
+    if (grp == NULL) rb_raise(rb_eArgError, "can't find group for %d", (int)gid);
     return setup_group(grp);
+# endif
 #else
     return Qnil;
 #endif
@@ -515,12 +794,45 @@ static VALUE
 etc_getgrnam(VALUE obj, VALUE nam)
 {
 #ifdef HAVE_GETGRENT
+    const char *grpname = StringValueCStr(nam);
     struct group *grp;
-    const char *p = StringValueCStr(nam);
+# ifdef HAVE_GETGRNAM_R
+    char *getgr_buf;
+    long getgr_buf_len;
+    int e;
+    getgr_buf_len = GETGR_R_SIZE_INIT;
+    if (getgr_buf_len < 0) getgr_buf_len = GETGR_R_SIZE_DEFAULT;
+    VALUE getgr_tmp = rb_str_tmp_new(getgr_buf_len);
+    getgr_buf = RSTRING_PTR(getgr_tmp);
+    getgr_buf_len = rb_str_capacity(getgr_tmp);
+    rb_str_set_len(getgr_tmp, getgr_buf_len);
+    errno = 0;
+    struct getgrnam_r_args args = GETGRNAM_R_ARGS(grpname, getgr_buf, getgr_buf_len);
 
-    grp = getgrnam(p);
-    if (grp == 0) rb_raise(rb_eArgError, "can't find group for %"PRIsVALUE, nam);
+    while ((e = WITHOUT_GVL_INT(nogvl_getgrnam_r, &args)) != 0) {
+        if (e != ERANGE || args.bufsize >= GETGR_R_SIZE_LIMIT) {
+            rb_str_resize(getgr_tmp, 0);
+            rb_syserr_fail(e, "getgrnam_r");
+        }
+        rb_str_modify_expand(getgr_tmp, args.bufsize);
+        args.buf = RSTRING_PTR(getgr_tmp);
+        args.bufsize = (size_t)rb_str_capacity(getgr_tmp);
+    }
+    grp = args.result;
+    if (grp == NULL) {
+        rb_str_resize(getgr_tmp, 0);
+        rb_raise(rb_eArgError, "can't find group for %"PRIsVALUE, nam);
+    }
+    VALUE group = setup_group(args.result);
+    rb_str_resize(getgr_tmp, 0);
+    RB_GC_GUARD(nam);
+    return group;
+# else
+    grp = getgrnam(grpnam);
+    if (grp == NULL) rb_raise(rb_eArgError, "can't find group for %"PRIsVALUE, nam);
+    RB_GC_GUARD(nam);
     return setup_group(grp);
+# endif
 #else
     return Qnil;
 #endif
@@ -531,7 +843,7 @@ static rb_atomic_t group_blocking;
 static VALUE
 group_ensure(VALUE _)
 {
-    endgrent();
+    WITHOUT_GVL(nogvl_endgrent, NULL);
     if (RUBY_ATOMIC_EXCHANGE(group_blocking, 0) != 1) {
 	rb_raise(rb_eRuntimeError, "unexpected group_blocking");
     }
@@ -541,11 +853,11 @@ group_ensure(VALUE _)
 static VALUE
 group_iterate(VALUE _)
 {
-    struct group *pw;
+    VALUE grp;
 
-    setgrent();
-    while ((pw = getgrent()) != 0) {
-	rb_yield(setup_group(pw));
+    WITHOUT_GVL(nogvl_setgrent, NULL);
+    while ((grp = setup_group_getgrent()) != Qnil) {
+	rb_yield(grp);
     }
     return Qnil;
 }
@@ -584,16 +896,13 @@ static VALUE
 etc_group(VALUE obj)
 {
 #ifdef HAVE_GETGRENT
-    struct group *grp;
-
     if (rb_block_given_p()) {
 	each_group();
     }
-    else if ((grp = getgrent()) != 0) {
-	return setup_group(grp);
-    }
-#endif
+    return setup_group_getgrent();
+#else
     return Qnil;
+#endif
 }
 
 #ifdef HAVE_GETGRENT
@@ -639,7 +948,7 @@ static VALUE
 etc_setgrent(VALUE obj)
 {
 #ifdef HAVE_GETGRENT
-    setgrent();
+    WITHOUT_GVL(nogvl_setgrent, NULL);
 #endif
     return Qnil;
 }
@@ -654,7 +963,7 @@ static VALUE
 etc_endgrent(VALUE obj)
 {
 #ifdef HAVE_GETGRENT
-    endgrent();
+    WITHOUT_GVL(nogvl_endgrent, NULL);
 #endif
     return Qnil;
 }
@@ -676,13 +985,10 @@ static VALUE
 etc_getgrent(VALUE obj)
 {
 #ifdef HAVE_GETGRENT
-    struct group *gr;
-
-    if ((gr = getgrent()) != 0) {
-	return setup_group(gr);
-    }
-#endif
+    return setup_group_getgrent();
+#else
     return Qnil;
+#endif
 }
 
 #define numberof(array) (sizeof(array) / sizeof(*(array)))
