@@ -38,8 +38,21 @@ jobs:
         ruby-version: ${{ matrix.ruby }}
         rubygems: ${{ matrix.ruby < '2.7' && '3.4.22' || '' }}
         bundler-cache: true
+    - id: platform
+      run: |
+        #!ruby
+        lib = File.expand_path("lib/#{RUBY_VERSION}/#{Gem::Platform.local}")
+        libs = [ENV["RUBYLIB"], lib].compact.join(File::PATH_SEPARATOR)
+        File.write(ENV["GITHUB_ENV"], "RUBYLIB=#{libs}\n", mode: "a")
+      shell: ruby {0}
+    - name: Version
+      run: |
+        ruby -v -retc -e "puts Etc::VERSION if Etc.const_defined?('VERSION')"
+    - name: Compile
+      run: rake compile
     - name: Run test
-      run: bundle exec rake compile test
+      run: |
+        ruby -Itest/lib -rhelper -e Test::Unit::AutoRunner.run test/etc/test_*.rb
     - id: fetch
       run: |
         : Fetch deeper for changelogs
@@ -50,6 +63,9 @@ jobs:
         set +x
       shell: bash
       if: ${{ matrix.ruby == needs.ruby-versions.outputs.latest }}
+    - name: Built Version
+      run: |
+        ruby -v -retc -e "puts Etc::VERSION if Etc.const_defined?('VERSION')"
     - id: build
       run: |
         bundle exec rake build
