@@ -34,6 +34,9 @@ jobs:
         ruby-version: ${{ matrix.ruby }}
         rubygems: ${{ matrix.ruby < '2.7' && '3.4.22' || '' }}
         bundler-cache: true
+    - name: Version
+      run: |
+        ruby -v -retc -e "puts Etc::VERSION if Etc.const_defined?('VERSION')"
     - name: Run test
       run: bundle exec rake compile test
     - id: fetch
@@ -46,6 +49,9 @@ jobs:
         set +x
       shell: bash
       if: ${{ matrix.ruby == needs.ruby-versions.outputs.latest }}
+    - name: Built Version
+      run: |
+        bundle exec ruby -v -retc -e "puts Etc::VERSION if Etc.const_defined?('VERSION')"
     - id: build
       run: |
         bundle exec rake build
