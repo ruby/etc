@@ -419,7 +419,7 @@ etc_getpwnam(VALUE obj, VALUE nam)
             return Qnil;
         }
 
-        if (enm != ERANGE || bufsizenm >= GETPW_R_SIZE_LIMIT) {
+        if (enm != ERANGE || args.bufsize >= GETPW_R_SIZE_LIMIT) {
             rb_str_resize(getpwnm_tmp, 0);
             rb_syserr_fail(enm, "getpwnam_r");
         }
