@@ -57,6 +57,8 @@ static VALUE sGroup;
 #endif
 RUBY_EXTERN char *getlogin(void);
 
+#undef rb_intern
+
 #define RUBY_ETC_VERSION "1.4.4"
 
 # if defined(HAVE_GETPWNAM_R) || defined(HAVE_GETPWUID_R)
