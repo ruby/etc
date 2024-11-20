@@ -24,7 +24,6 @@ end
 
 task "rdoc" =>  "changelogs"
 RDoc::Task.new do |rdoc|
-  rdoc.main = "README.md"
 end
 
 task :test => :compile
