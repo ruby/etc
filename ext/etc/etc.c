@@ -178,6 +178,17 @@ safe_setup_filesystem_str(const char *str)
     if (str == 0) str = "";
     return rb_filesystem_str_new_cstr(str);
 }
+
+# define declare_buffer(prefix, size_prefix) \
+    long prefix##_buf_len = size_prefix##_SIZE_INIT;  /* maybe -1 */ \
+    VALUE prefix##_tmp = \
+	rb_str_tmp_new(prefix##_buf_len < 0 ? \
+		       (size_prefix##_SIZE_DEFAULT) : prefix##_buf_len); \
+    char *prefix##_buf = ( \
+	rb_str_set_len(prefix##_tmp, \
+		       prefix##_buf_len = rb_str_capacity(prefix##_tmp)), \
+	RSTRING_PTR(prefix##_tmp))
+
 #endif
 
 #ifdef HAVE_GETPWENT
@@ -247,9 +258,6 @@ struct getpwuid_r_args {
     struct passwd pwstore;
 };
 
-# define GETPWUID_R_ARGS(uid_, buf_, bufsize_) (struct getpwuid_r_args) \
-    {.uid = uid_, .buf = buf_, .bufsize = bufsize_, .result = NULL}
-
 static void *
 nogvl_getpwuid_r(void *args)
 {
@@ -266,9 +274,6 @@ struct getpwnam_r_args {
     struct passwd *result;
     struct passwd pwstore;
 };
-
-# define GETPWNAM_R_ARGS(login_, buf_, bufsize_) (struct getpwnam_r_args) \
-    {.login = login_, .buf = buf_, .bufsize = bufsize_, .result = NULL}
 
 static void *
 nogvl_getpwnam_r(void *args)
@@ -312,33 +317,17 @@ etc_getpwuid(int argc, VALUE *argv, VALUE obj)
 {
 #if defined(HAVE_GETPWENT)
     VALUE id;
-    rb_uid_t uid;
-
-    if (rb_scan_args(argc, argv, "01", &id) == 1) {
-	uid = NUM2UIDT(id);
-    }
-    else {
-	uid = getuid();
-    }
+    rb_uid_t uid = (rb_scan_args(argc, argv, "01", &id) == 1) ?
+	NUM2UIDT(id) : getuid();
 
 # ifdef HAVE_GETPWUID_R
-    char *bufid;
-    long bufsizeid = GETPW_R_SIZE_INIT;  /* maybe -1 */
-
-    if (bufsizeid < 0)
-        bufsizeid = GETPW_R_SIZE_DEFAULT;
-
-    VALUE getpwid_tmp = rb_str_tmp_new(bufsizeid);
-
-    bufid = RSTRING_PTR(getpwid_tmp);
-    bufsizeid = rb_str_capacity(getpwid_tmp);
-    rb_str_set_len(getpwid_tmp, bufsizeid);
-    struct getpwuid_r_args args = GETPWUID_R_ARGS(uid, bufid, bufsizeid);
-
+    declare_buffer(getpwid, GETPW_R);
+    struct getpwuid_r_args args = {uid, getpwid_buf, getpwid_buf_len};
     int eid;
+    VALUE result;
+
     errno = 0;
     while ((eid = WITHOUT_GVL_INT(nogvl_getpwuid_r, &args)) != 0) {
-
         if (eid == ENOENT || eid== ESRCH || eid == EBADF || eid == EPERM) {
             /* not found; non-errors */
             rb_str_resize(getpwid_tmp, 0);
@@ -362,7 +351,7 @@ etc_getpwuid(int argc, VALUE *argv, VALUE obj)
     }
 
     /* found it */
-    VALUE result = setup_passwd(args.result);
+    result = setup_passwd(args.result);
     rb_str_resize(getpwid_tmp, 0);
     return result;
 # else
@@ -396,23 +385,13 @@ etc_getpwnam(VALUE obj, VALUE nam)
 #ifdef HAVE_GETPWENT
 # ifdef HAVE_GETPWNAM_R
     char *login = RSTRING_PTR(nam);
-    char *bufnm;
-    long bufsizenm = GETPW_R_SIZE_INIT;  /* maybe -1 */
-
-    if (bufsizenm < 0)
-        bufsizenm = GETPW_R_SIZE_DEFAULT;
-
-    VALUE getpwnm_tmp = rb_str_tmp_new(bufsizenm);
-
-    bufnm = RSTRING_PTR(getpwnm_tmp);
-    bufsizenm = rb_str_capacity(getpwnm_tmp);
-    rb_str_set_len(getpwnm_tmp, bufsizenm);
-    struct getpwnam_r_args args = GETPWNAM_R_ARGS(login, bufnm, bufsizenm);
-
+    declare_buffer(getpwnm, GETPW_R);
+    struct getpwnam_r_args args = {login, getpwnm_buf, getpwnm_buf_len};
     int enm;
+    VALUE result;
+
     errno = 0;
     while ((enm = WITHOUT_GVL_INT(nogvl_getpwnam_r, &args)) != 0) {
-
         if (enm == ENOENT || enm== ESRCH || enm == EBADF || enm == EPERM) {
             /* not found; non-errors */
             rb_str_resize(getpwnm_tmp, 0);
@@ -424,7 +403,7 @@ etc_getpwnam(VALUE obj, VALUE nam)
             rb_syserr_fail(enm, "getpwnam_r");
         }
 
-        rb_str_modify_expand(getpwnm_tmp, bufsizenm);
+        rb_str_modify_expand(getpwnm_tmp, getpwnm_buf_len);
         args.buf = RSTRING_PTR(getpwnm_tmp);
         args.bufsize = (size_t)rb_str_capacity(getpwnm_tmp);
     }
@@ -436,7 +415,7 @@ etc_getpwnam(VALUE obj, VALUE nam)
     }
 
     /* found it */
-    VALUE result = setup_passwd(args.result);
+    result = setup_passwd(args.result);
     rb_str_resize(getpwnm_tmp, 0);
     RB_GC_GUARD(nam);
     return result;
@@ -627,9 +606,6 @@ struct getgrgid_r_args {
     struct group grp;
 };
 
-# define GETGRGID_R_ARGS(gid_, buf_, bufsize_) (struct getgrgid_r_args) \
-    {.gid = gid_, .buf = buf_, .bufsize = bufsize_, .result = NULL}
-
 static void *
 nogvl_getgrgid_r(void *args)
 {
@@ -646,9 +622,6 @@ struct getgrnam_r_args {
     struct group *result;
     struct group grp;
 };
-
-# define GETGRNAM_R_ARGS(login_, buf_, bufsize_) (struct getgrnam_r_args) \
-    {.login = login_, .buf = buf_, .bufsize = bufsize_, .result = NULL}
 
 static void *
 nogvl_getgrnam_r(void *args)
@@ -725,28 +698,16 @@ etc_getgrgid(int argc, VALUE *argv, VALUE obj)
 {
 #ifdef HAVE_GETGRENT
     VALUE id;
-    gid_t gid;
-
-    if (rb_scan_args(argc, argv, "01", &id) == 1) {
-	gid = NUM2GIDT(id);
-    }
-    else {
-	gid = getgid();
-    }
+    gid_t gid = (rb_scan_args(argc, argv, "01", &id) == 1) ?
+	NUM2GIDT(id) : getgid();
     struct group *grp;
 # ifdef HAVE_GETGRGID_R
-    char *getgr_buf;
-    long getgr_buf_len;
+    declare_buffer(getgr, GETGR_R);
+    struct getgrgid_r_args args = {gid, getgr_buf, getgr_buf_len};
     int e;
-    getgr_buf_len = GETGR_R_SIZE_INIT;
-    if (getgr_buf_len < 0) getgr_buf_len = GETGR_R_SIZE_DEFAULT;
-    VALUE getgr_tmp = rb_str_tmp_new(getgr_buf_len);
-    getgr_buf = RSTRING_PTR(getgr_tmp);
-    getgr_buf_len = rb_str_capacity(getgr_tmp);
-    rb_str_set_len(getgr_tmp, getgr_buf_len);
-    errno = 0;
-    struct getgrgid_r_args args = GETGRGID_R_ARGS(gid, getgr_buf, getgr_buf_len);
+    VALUE group;
 
+    errno = 0;
     while ((e = WITHOUT_GVL_INT(nogvl_getgrgid_r, &args)) != 0) {
         if (e != ERANGE || args.bufsize >= GETGR_R_SIZE_LIMIT) {
             rb_str_resize(getgr_tmp, 0);
@@ -761,7 +722,7 @@ etc_getgrgid(int argc, VALUE *argv, VALUE obj)
         rb_str_resize(getgr_tmp, 0);
         rb_raise(rb_eArgError, "can't find group for %d", (int)gid);
     }
-    VALUE group = setup_group(args.result);
+    group = setup_group(args.result);
     rb_str_resize(getgr_tmp, 0);
     return group;
 # else
@@ -797,18 +758,12 @@ etc_getgrnam(VALUE obj, VALUE nam)
     const char *grpname = StringValueCStr(nam);
     struct group *grp;
 # ifdef HAVE_GETGRNAM_R
-    char *getgr_buf;
-    long getgr_buf_len;
+    declare_buffer(getgr, GETGR_R);
+    struct getgrnam_r_args args = {grpname, getgr_buf, getgr_buf_len};
     int e;
-    getgr_buf_len = GETGR_R_SIZE_INIT;
-    if (getgr_buf_len < 0) getgr_buf_len = GETGR_R_SIZE_DEFAULT;
-    VALUE getgr_tmp = rb_str_tmp_new(getgr_buf_len);
-    getgr_buf = RSTRING_PTR(getgr_tmp);
-    getgr_buf_len = rb_str_capacity(getgr_tmp);
-    rb_str_set_len(getgr_tmp, getgr_buf_len);
-    errno = 0;
-    struct getgrnam_r_args args = GETGRNAM_R_ARGS(grpname, getgr_buf, getgr_buf_len);
+    VALUE group;
 
+    errno = 0;
     while ((e = WITHOUT_GVL_INT(nogvl_getgrnam_r, &args)) != 0) {
         if (e != ERANGE || args.bufsize >= GETGR_R_SIZE_LIMIT) {
             rb_str_resize(getgr_tmp, 0);
@@ -823,7 +778,7 @@ etc_getgrnam(VALUE obj, VALUE nam)
         rb_str_resize(getgr_tmp, 0);
         rb_raise(rb_eArgError, "can't find group for %"PRIsVALUE, nam);
     }
-    VALUE group = setup_group(args.result);
+    group = setup_group(args.result);
     rb_str_resize(getgr_tmp, 0);
     RB_GC_GUARD(nam);
     return group;
