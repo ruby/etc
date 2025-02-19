@@ -174,6 +174,7 @@ class TestEtc < Test::Unit::TestCase
   end if File.method_defined?(:absolute_path?)
 
   def test_ractor
+    omit("https://bugs.ruby-lang.org/issues/21115")
     return unless Etc.passwd # => skip test if no platform support
     Etc.endpwent
 
