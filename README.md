@@ -5,6 +5,7 @@ The Etc module provides access to information typically stored in files in the /
 The information accessible consists of the information found in the `/etc/passwd` and `/etc/group` files, plus information about he system's temporary directory (/tmp) and configuration directory (/etc).
 
 The Etc module provides a more reliable way to access information about the logged in user than environment variables such as +$USER+.
+Read the [API RDoc](https://docs.ruby-lang.org/en/master/Etc.html).
 
 ## Installation
 
