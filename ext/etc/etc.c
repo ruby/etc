@@ -1163,9 +1163,6 @@ Init_etc(void)
 {
     VALUE mEtc;
 
-#ifdef HAVE_RB_EXT_RACTOR_SAFE
-    RB_EXT_RACTOR_SAFE(true);
-#endif
     mEtc = rb_define_module("Etc");
     /* The version */
     rb_define_const(mEtc, "VERSION", rb_str_new_cstr(RUBY_ETC_VERSION));
