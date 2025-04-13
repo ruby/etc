@@ -3,6 +3,8 @@ require "test/unit"
 require "etc"
 
 class TestEtc < Test::Unit::TestCase
+  MAX_THREADS = 20
+
   def test_getlogin
     s = Etc.getlogin
     return if s == nil
@@ -46,6 +48,21 @@ class TestEtc < Test::Unit::TestCase
     end
   end unless RUBY_PLATFORM.include?("android")
 
+  def test_getpwuid_thread_safety
+    uids = []
+    Etc.passwd {|s| uids << s.uid}
+    uids.uniq!
+    return unless uids = uids[-MAX_THREADS..-1]
+
+    uids.map do |uid|
+      Thread.new do
+        1000.times do
+          assert_equal uid, Etc.getpwuid(uid).uid
+        end
+      end
+    end.map(&:join)
+  end
+
   def test_getpwnam
     passwd = {}
     Etc.passwd do |s|
@@ -55,6 +72,24 @@ class TestEtc < Test::Unit::TestCase
       assert_equal(s, Etc.getpwnam(s.name))
     end
   end unless RUBY_PLATFORM.include?("android")
+
+  def test_getpwnam_thread_safety
+    passwd = {}
+    Etc.passwd do |s|
+      (passwd[s.name] ||= []) << s.uid unless /\A\+/ =~ s.name
+    end
+    passwd = passwd.to_a.reject{|name, uids| uids.length > 1}
+    return unless passwd = passwd[-MAX_THREADS..-1]
+
+    passwd.map do |name, uids|
+      uid = uids.first
+      Thread.new do
+        1000.times do
+          assert_equal uid, Etc.getpwnam(name).uid
+        end
+      end
+    end.map(&:join)
+  end
 
   def test_passwd_with_low_level_api
     a = []
@@ -96,6 +131,21 @@ class TestEtc < Test::Unit::TestCase
     end
   end
 
+  def test_getgrgid_thread_safety
+    gids = []
+    Etc.group {|g| gids << g.gid}
+    gids.uniq!
+    return unless gids = gids[-MAX_THREADS..-1]
+
+    gids.map do |gid|
+      Thread.new do
+        1000.times do
+          assert_equal gid, Etc.getgrgid(gid).gid
+        end
+      end
+    end.map(&:join)
+  end
+
   def test_getgrnam
     groups = Hash.new {[]}
     Etc.group do |s|
@@ -104,6 +154,24 @@ class TestEtc < Test::Unit::TestCase
     groups.each_pair do |n, s|
       assert_include(s, Etc.getgrnam(n).gid)
     end
+  end
+
+  def test_getgrnam_thread_safety
+    groups = {}
+    Etc.group do |s|
+      (groups[s.name] ||= []) << s.gid unless /\A\+/ =~ s.name
+    end
+    groups = groups.to_a.reject{|name, gids| gids.length > 1}
+    return unless groups = groups[-MAX_THREADS..-1]
+
+    groups.map do |name, gids|
+      gid = gids.first
+      Thread.new do
+        1000.times do
+          assert_equal gid, Etc.getgrnam(name).gid
+        end
+      end
+    end.map(&:join)
   end
 
   def test_group_with_low_level_api
