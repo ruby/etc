@@ -53,7 +53,7 @@ jobs:
       shell: bash
       # Ubuntu 20.04 still has libyaml 0.2.2
     - name: Upload package
-      uses: actions/upload-artifact@v5
+      uses: actions/upload-artifact@v6
       with:
         path: pkg/*.gem
         name: ${{steps.build.outputs.pkg}}
