@@ -13,6 +13,15 @@ module Etc
   # Maxprocs detects CPU quota from Linux cgroups and returns the appropriate
   # number of processors for container environments.
   module Maxprocs
+    unless Integer.method_defined?(:ceildiv)
+      refine Integer do
+        def ceildiv(n)
+          (self + n - 1) / n
+        end
+      end
+      using self
+    end
+
     CGROUP_FILE_PATH = "/proc/self/cgroup"
     CGROUP_V1_QUOTA_PATH = "/sys/fs/cgroup/cpu/cpu.cfs_quota_us"
     CGROUP_V1_PERIOD_PATH = "/sys/fs/cgroup/cpu/cpu.cfs_period_us"
@@ -45,7 +54,7 @@ module Etc
       period = Integer(File.read(CGROUP_V1_PERIOD_PATH))
       return nil if period <= 0
 
-      quota / period
+      quota.ceildiv(period)
     end
 
     def read_quota_v2
@@ -58,7 +67,7 @@ module Etc
       period = Integer(period_str)
       return nil if period <= 0
 
-      max / period
+      max.ceildiv(period)
     end
   end
 
