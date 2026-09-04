@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 require "test/unit"
 require "etc"
+require "fileutils"
+require "tmpdir"
 
 class TestEtc < Test::Unit::TestCase
   def test_getlogin
@@ -169,6 +171,51 @@ class TestEtc < Test::Unit::TestCase
     assert_operator(1, :<=, n)
   end
 
+  def test_processor_count
+    assert_instance_of(Integer, Etc.processor_count)
+    assert_equal(Etc.nprocessors, Etc.processor_count)
+  end
+
+  def test_processor_quota
+    quota = Etc.processor_quota
+    assert_instance_of(Float, quota)
+    assert_operator(0.0, :<, quota)
+    assert_operator(quota, :<=, Etc.processor_count.to_f)
+  end
+
+  def test_cgroup_v2_processor_quota
+    with_cgroup_files("0::/workload\n", "cgroup2", "rw") do |mount, cgroup_path, mountinfo|
+      write_cpu_max(File.join(mount, "workload"), "150000 100000\n")
+      assert_equal(1.5, processor_cgroup.cpu_quota(cgroup_path, mountinfo))
+    end
+  end
+
+  def test_cgroup_v2_processor_quota_inherited_from_parent
+    with_cgroup_files("0::/parent/workload\n", "cgroup2", "rw") do |mount, cgroup_path, mountinfo|
+      write_cpu_max(File.join(mount, "parent"), "100000 100000\n")
+      write_cpu_max(File.join(mount, "parent", "workload"), "150000 100000\n")
+      assert_equal(1.0, processor_cgroup.cpu_quota(cgroup_path, mountinfo))
+    end
+  end
+
+  def test_cgroup_v1_processor_quota
+    with_cgroup_files("2:cpu,cpuacct:/workload\n", "cgroup", "rw,cpu,cpuacct") do |mount, cgroup_path, mountinfo|
+      write_cpu_cfs(mount, "-1\n", "100000\n")
+      write_cpu_cfs(File.join(mount, "workload"), "50000\n", "100000\n")
+      assert_equal(0.5, processor_cgroup.cpu_quota(cgroup_path, mountinfo))
+    end
+  end
+
+  def test_cgroup_processor_quota_ignores_unlimited_or_invalid_values
+    with_cgroup_files("0::/workload\n", "cgroup2", "rw") do |mount, cgroup_path, mountinfo|
+      write_cpu_max(File.join(mount, "workload"), "max 100000\n")
+      assert_nil(processor_cgroup.cpu_quota(cgroup_path, mountinfo))
+
+      write_cpu_max(File.join(mount, "workload"), "invalid\n")
+      assert_nil(processor_cgroup.cpu_quota(cgroup_path, mountinfo))
+    end
+  end
+
   def test_sysconfdir
     assert_operator(File, :absolute_path?, Etc.sysconfdir)
   end if File.method_defined?(:absolute_path?)
@@ -196,6 +243,8 @@ class TestEtc < Test::Unit::TestCase
               }
             end
             raise unless Integer === Etc.nprocessors
+            raise unless Integer === Etc.processor_count
+            raise unless Float === Etc.processor_quota
           end
         end
       end.each(&:join)
@@ -253,5 +302,35 @@ class TestEtc < Test::Unit::TestCase
         end
       end.each(&:join)
     RUBY
+  end
+
+  private
+
+  def processor_cgroup
+    Etc.const_get(:Cgroup, false)
+  end
+
+  def with_cgroup_files(membership, filesystem, options)
+    Dir.mktmpdir do |directory|
+      mount = File.join(directory, "cgroup mount")
+      Dir.mkdir(mount)
+      cgroup = File.join(directory, "cgroup")
+      mountinfo = File.join(directory, "mountinfo")
+      File.write(cgroup, membership)
+      escaped_mount = mount.gsub("\\") { "\\134" }.gsub(" ") { "\\040" }
+      File.write(mountinfo, "36 29 0:32 / #{escaped_mount} rw - #{filesystem} cgroup #{options}\n")
+      yield mount, cgroup, mountinfo
+    end
+  end
+
+  def write_cpu_max(directory, value)
+    FileUtils.mkdir_p(directory)
+    File.write(File.join(directory, "cpu.max"), value)
+  end
+
+  def write_cpu_cfs(directory, quota, period)
+    FileUtils.mkdir_p(directory)
+    File.write(File.join(directory, "cpu.cfs_quota_us"), quota)
+    File.write(File.join(directory, "cpu.cfs_period_us"), period)
   end
 end
