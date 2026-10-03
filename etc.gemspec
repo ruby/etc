@@ -31,6 +31,7 @@ Gem::Specification.new do |spec|
     ext/etc/constdefs.h
     ext/etc/etc.c
     ext/etc/extconf.rb
+    ext/etc/lib/etc.rb
     ext/etc/mkconstants.rb
     test/etc/test_etc.rb
   ] + changelogs
